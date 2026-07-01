@@ -18,6 +18,20 @@ python web_app.py
 
 브라우저에서 `http://127.0.0.1:8765`를 엽니다.
 
+## 연합인포맥스 작성 기사 목록 수집
+
+정원 기자 / `jwon@yna.co.kr` 검색 결과의 제목, URL, 기자명, 날짜 메타데이터를 수집하려면:
+
+```powershell
+python collect_einfomax_writer.py --max-articles 100 --max-pages 5
+```
+
+본문 수집은 공개 기사 저작권과 AI 활용 권리관계를 확인한 뒤, 권한이 있는 경우에만 사용하세요.
+
+```powershell
+python collect_einfomax_writer.py --include-body --confirm-ai-use-rights --max-articles 500 --max-pages 25 --output-dir data\einfomax_writer_latest500
+```
+
 현재 결과를 알림 없이 저장해서 최초 실행 스팸을 막으려면:
 
 ```powershell
