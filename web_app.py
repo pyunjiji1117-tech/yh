@@ -594,14 +594,16 @@ HTML = r"""<!doctype html>
         </div>
       `).join("");
       el.querySelectorAll("input").forEach(input => {
-        input.addEventListener("change", () => {
+        input.addEventListener("change", async () => {
           config.rss_feeds[Number(input.dataset.index)][input.dataset.field] = input.value.trim();
+          try { await saveConfig("출처 저장됨"); } catch (error) { setMessage(error.message, "bad"); }
         });
       });
       el.querySelectorAll("button[data-remove]").forEach(button => {
-        button.addEventListener("click", () => {
+        button.addEventListener("click", async () => {
           config.rss_feeds.splice(Number(button.dataset.remove), 1);
           renderConfig();
+          try { await saveConfig("출처 저장됨"); } catch (error) { setMessage(error.message, "bad"); }
         });
       });
     }
@@ -611,10 +613,12 @@ HTML = r"""<!doctype html>
       renderChips("keywords", config.keywords, index => {
         config.keywords.splice(index, 1);
         renderConfig();
+        saveConfig("키워드 저장됨").catch(error => setMessage(error.message, "bad"));
       });
       renderChips("excludeKeywords", config.exclude_keywords, index => {
         config.exclude_keywords.splice(index, 1);
         renderConfig();
+        saveConfig("제외 키워드 저장됨").catch(error => setMessage(error.message, "bad"));
       });
       document.getElementById("schedulerEnabled").checked = !!config.scheduler.enabled;
       document.getElementById("instantAlerts").checked = !!config.scheduler.instant_alerts;
@@ -644,7 +648,7 @@ HTML = r"""<!doctype html>
       config.notifications.telegram_enabled = document.getElementById("telegramEnabled").checked;
     }
 
-    async function saveConfig() {
+    async function saveConfig(message = "저장됨") {
       syncFormToConfig();
       const data = await request("/api/config", {
         method: "POST",
@@ -652,29 +656,40 @@ HTML = r"""<!doctype html>
       });
       config = data.config;
       renderConfig();
-      setMessage("저장됨", "ok");
+      setMessage(message, "ok");
       await loadState();
     }
 
-    function addItem(inputId, target) {
+    async function addItem(inputId, target, message) {
       const input = document.getElementById(inputId);
       const value = input.value.trim();
       if (!value) return;
       if (!target.includes(value)) target.push(value);
       input.value = "";
       renderConfig();
+      await saveConfig(message);
     }
 
     function wireControls() {
-      document.getElementById("addKeyword").addEventListener("click", () => addItem("keywordInput", config.keywords));
+      document.getElementById("addKeyword").addEventListener("click", async () => {
+        try { await addItem("keywordInput", config.keywords, "키워드 저장됨"); } catch (error) { setMessage(error.message, "bad"); }
+      });
       document.getElementById("keywordInput").addEventListener("keydown", event => {
-        if (event.key === "Enter") addItem("keywordInput", config.keywords);
+        if (event.key === "Enter") {
+          event.preventDefault();
+          addItem("keywordInput", config.keywords, "키워드 저장됨").catch(error => setMessage(error.message, "bad"));
+        }
       });
-      document.getElementById("addExclude").addEventListener("click", () => addItem("excludeInput", config.exclude_keywords));
+      document.getElementById("addExclude").addEventListener("click", async () => {
+        try { await addItem("excludeInput", config.exclude_keywords, "제외 키워드 저장됨"); } catch (error) { setMessage(error.message, "bad"); }
+      });
       document.getElementById("excludeInput").addEventListener("keydown", event => {
-        if (event.key === "Enter") addItem("excludeInput", config.exclude_keywords);
+        if (event.key === "Enter") {
+          event.preventDefault();
+          addItem("excludeInput", config.exclude_keywords, "제외 키워드 저장됨").catch(error => setMessage(error.message, "bad"));
+        }
       });
-      document.getElementById("addFeed").addEventListener("click", () => {
+      document.getElementById("addFeed").addEventListener("click", async () => {
         const name = document.getElementById("feedName").value.trim();
         const url = document.getElementById("feedUrl").value.trim();
         if (!name || !url) return;
@@ -682,6 +697,7 @@ HTML = r"""<!doctype html>
         document.getElementById("feedName").value = "";
         document.getElementById("feedUrl").value = "";
         renderConfig();
+        try { await saveConfig("출처 저장됨"); } catch (error) { setMessage(error.message, "bad"); }
       });
       document.getElementById("saveConfig").addEventListener("click", async () => {
         try { await saveConfig(); } catch (error) { setMessage(error.message, "bad"); }
