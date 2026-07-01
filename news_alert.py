@@ -19,6 +19,12 @@ BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = BASE_DIR / "config.json"
 
 
+def configure_stdio() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
+
+
 @dataclass(frozen=True)
 class Article:
     source: str
@@ -347,6 +353,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    configure_stdio()
     args = parse_args()
     load_dotenv(BASE_DIR / ".env")
     config = load_config(Path(args.config))

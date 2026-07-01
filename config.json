@@ -16,5 +16,18 @@
       "url": "http://www.fsc.go.kr/about/fsc_bbs_rss/?fid=0111"
     }
   ],
+  "scheduler": {
+    "enabled": true,
+    "poll_interval_seconds": 600,
+    "instant_alerts": true,
+    "fixed_time_alerts": false,
+    "fixed_times": [
+      "09:00"
+    ]
+  },
+  "notifications": {
+    "console_enabled": true,
+    "telegram_enabled": true
+  },
   "database": "news_alerts.sqlite3"
 }
