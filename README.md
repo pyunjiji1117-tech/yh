@@ -5,8 +5,10 @@
 ## 설정
 
 1. `.env.example`을 참고해 `.env`를 만듭니다.
-2. `config.json`의 `keywords`에 감시할 키워드를 넣습니다.
-3. 특정 사이트 RSS가 있으면 `rss_feeds`에 추가합니다.
+2. 웹 대시보드에서 키워드와 RSS 출처를 설정합니다.
+3. 저장된 개인 설정은 `config.local.json`에 보관되며 깃에 올라가지 않습니다.
+
+`config.json`은 처음 실행할 때 참고하는 기본 샘플입니다. 노트북별 실제 설정은 `config.local.json`에 저장되므로 `git pull`을 해도 개인 키워드 목록이 덮어써지지 않습니다.
 
 ## 실행
 

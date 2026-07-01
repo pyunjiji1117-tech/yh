@@ -7,7 +7,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from news_alert import BASE_DIR, DEFAULT_CONFIG_PATH, load_config, load_dotenv
+from news_alert import BASE_DIR, DEFAULT_CONFIG_PATH, TEMPLATE_CONFIG_PATH, load_config, load_dotenv
 
 
 API_HOST = "api.telegram.org"
@@ -44,10 +44,13 @@ def telegram_request(token: str, method: str, payload: dict | None = None) -> di
 
 
 def print_config_status() -> None:
+    print(f"config path: {DEFAULT_CONFIG_PATH}")
+    print(f"config.local exists: {DEFAULT_CONFIG_PATH.exists()}")
+    print(f"config template exists: {TEMPLATE_CONFIG_PATH.exists()}")
     try:
         config = load_config(DEFAULT_CONFIG_PATH)
     except Exception as exc:
-        print(f"config.json: failed to read ({exc})")
+        print(f"config: failed to read ({exc})")
         return
 
     notifications = config.get("notifications") or {}

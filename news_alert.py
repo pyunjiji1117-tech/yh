@@ -16,7 +16,8 @@ from pathlib import Path
 
 
 BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_CONFIG_PATH = BASE_DIR / "config.json"
+TEMPLATE_CONFIG_PATH = BASE_DIR / "config.json"
+DEFAULT_CONFIG_PATH = BASE_DIR / "config.local.json"
 
 
 def configure_stdio() -> None:
@@ -55,9 +56,12 @@ def load_dotenv(path: Path) -> None:
 
 
 def load_config(path: Path) -> dict:
-    if not path.exists():
+    config_path = Path(path)
+    if not config_path.exists() and config_path == DEFAULT_CONFIG_PATH and TEMPLATE_CONFIG_PATH.exists():
+        config_path = TEMPLATE_CONFIG_PATH
+    if not config_path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
-    with path.open("r", encoding="utf-8") as f:
+    with config_path.open("r", encoding="utf-8") as f:
         return json.load(f)
 
 
