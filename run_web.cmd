@@ -1,5 +1,6 @@
 @echo off
 cd /d "%~dp0"
-
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$running = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -in @('python.exe','pythonw.exe') -and $_.CommandLine -match 'web_app.py' }); if ($running.Count -gt 0) { Write-Host 'News alert web server is already running.'; Write-Host ('PID: ' + (($running | Select-Object -ExpandProperty ProcessId) -join ', ')); Start-Process 'http://127.0.0.1:8765'; exit 0 }; $python = if (Test-Path '.venv\Scripts\python.exe') { (Resolve-Path '.venv\Scripts\python.exe').Path } else { $cmd = Get-Command python -ErrorAction SilentlyContinue; if (-not $cmd) { Write-Host 'Python not found. Run setup_env.cmd first.'; exit 1 }; $cmd.Source }; $root = (Resolve-Path '.').Path; $out = Join-Path $root 'web_service.out.log'; $err = Join-Path $root 'web_service.err.log'; $proc = Start-Process -FilePath $python -ArgumentList 'web_app.py' -WorkingDirectory $root -RedirectStandardOutput $out -RedirectStandardError $err -WindowStyle Hidden -PassThru; Start-Sleep -Seconds 2; try { Invoke-WebRequest -Uri 'http://127.0.0.1:8765/api/state' -UseBasicParsing -TimeoutSec 5 | Out-Null; Write-Host ('Started news alert web server. PID: ' + $proc.Id); Start-Process 'http://127.0.0.1:8765' } catch { Write-Host 'Server start was requested, but it did not answer yet.'; Write-Host 'Check web_service.err.log if it does not open.'; exit 1 }"
+set "PYTHON_EXE=python"
+if exist ".venv\Scripts\python.exe" set "PYTHON_EXE=.venv\Scripts\python.exe"
+"%PYTHON_EXE%" web_server_ctl.py start
 pause
