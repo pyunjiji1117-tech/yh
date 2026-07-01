@@ -21,12 +21,15 @@ from news_alert import (
     collect_articles,
     configure_stdio,
     format_article,
+    get_telegram_chat_ids,
     init_db,
     load_config,
     load_dotenv,
     notify_console,
     notify_telegram,
     save_new_articles,
+    sync_telegram_subscribers,
+    telegram_message,
 )
 
 
@@ -827,7 +830,7 @@ HTML = r"""<!doctype html>
         <span>최근 새 기사: ${escapeHtml(state.last_new_count)}</span>
       `;
       document.getElementById("telegramStatus").textContent = data.telegram_configured
-        ? "텔레그램 연결 정보 있음"
+        ? `텔레그램 구독자 ${data.telegram_recipient_count || 0}명`
         : "텔레그램 연결 정보 없음";
       document.getElementById("telegramMode").textContent = data.telegram_enabled
         ? "알림 켜짐"
@@ -991,6 +994,15 @@ def db_path(config: dict) -> Path:
     return BASE_DIR / config.get("database", "news_alerts.sqlite3")
 
 
+def telegram_recipient_ids(config: dict) -> list[str]:
+    conn = init_db(db_path(config))
+    try:
+        sync_telegram_subscribers(conn)
+        return get_telegram_chat_ids(conn)
+    finally:
+        conn.close()
+
+
 def ensure_service_tables(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
@@ -1076,24 +1088,16 @@ def articles_since(config: dict, since_iso: str | None) -> list[Article]:
     return [row_to_article(row) for row in rows]
 
 
-def send_telegram_text(text: str) -> bool:
+def send_telegram_text(text: str, chat_ids: list[str]) -> int:
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-    if not token or not chat_id:
-        return False
+    if not token or not chat_ids:
+        return 0
 
-    endpoint = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = urllib.parse.urlencode(
-        {
-            "chat_id": chat_id,
-            "text": text[:3900],
-            "disable_web_page_preview": "true",
-        }
-    ).encode("utf-8")
-    request = urllib.request.Request(endpoint, data=payload, method="POST")
-    with urllib.request.urlopen(request, timeout=15) as response:
-        response.read()
-    return True
+    sent_count = 0
+    for chat_id in chat_ids:
+        telegram_message(token, chat_id, text[:3900])
+        sent_count += 1
+    return sent_count
 
 
 def send_fixed_digest(config: dict, slot: str) -> None:
@@ -1119,8 +1123,11 @@ def send_fixed_digest(config: dict, slot: str) -> None:
     if config["notifications"]["telegram_enabled"]:
         text = f"[뉴스 요약] {slot} 기준 새 기사 {len(articles)}개"
         try:
-            send_telegram_text(text)
-            notify_telegram(articles)
+            chat_ids = telegram_recipient_ids(config)
+            if not chat_ids:
+                raise ValueError("텔레그램 구독자가 없습니다. 봇에 /start를 먼저 보내주세요.")
+            send_telegram_text(text, chat_ids)
+            notify_telegram(articles, chat_ids)
             mark_notified(config, articles)
             add_event(f"고정 알림 {slot}: {len(articles)}개 전송")
         except Exception as exc:
@@ -1146,7 +1153,10 @@ def perform_check(mark_seen: bool = False, reason: str = "manual") -> dict:
             if config["notifications"]["console_enabled"]:
                 notify_console(new_articles)
             if config["scheduler"]["instant_alerts"] and config["notifications"]["telegram_enabled"]:
-                notify_telegram(new_articles)
+                chat_ids = telegram_recipient_ids(config)
+                if not chat_ids:
+                    raise ValueError("텔레그램 구독자가 없습니다. 봇에 /start를 먼저 보내주세요.")
+                notify_telegram(new_articles, chat_ids)
                 mark_notified(config, new_articles)
                 add_event(f"새 기사 {len(new_articles)}개 즉시 전송")
             else:
@@ -1257,11 +1267,14 @@ class Handler(BaseHTTPRequestHandler):
                 state = dict(RUNTIME_STATE)
                 events = list(EVENTS)
             config = read_config()
+            token_present = bool(os.environ.get("TELEGRAM_BOT_TOKEN"))
+            recipient_count = len(telegram_recipient_ids(config)) if token_present else 0
             self.send_json(
                 {
                     "state": state,
                     "events": events,
-                    "telegram_configured": bool(os.environ.get("TELEGRAM_BOT_TOKEN") and os.environ.get("TELEGRAM_CHAT_ID")),
+                    "telegram_configured": bool(token_present and recipient_count),
+                    "telegram_recipient_count": recipient_count,
                     "telegram_enabled": bool(config["notifications"]["telegram_enabled"]),
                 }
             )
@@ -1288,11 +1301,15 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             if parsed.path == "/api/test-telegram":
-                if not os.environ.get("TELEGRAM_BOT_TOKEN") or not os.environ.get("TELEGRAM_CHAT_ID"):
-                    raise ValueError("텔레그램 토큰 또는 chat_id가 없습니다.")
-                send_telegram_text(f"뉴스 알림 테스트 전송\n{local_time_text()}")
-                add_event("텔레그램 테스트 전송")
-                self.send_json({"message": "텔레그램 테스트 메시지 전송됨"})
+                config = read_config()
+                if not os.environ.get("TELEGRAM_BOT_TOKEN"):
+                    raise ValueError("텔레그램 토큰이 없습니다.")
+                chat_ids = telegram_recipient_ids(config)
+                if not chat_ids:
+                    raise ValueError("텔레그램 구독자가 없습니다. 봇에 /start를 먼저 보내주세요.")
+                sent_count = send_telegram_text(f"뉴스 알림 테스트 전송\n{local_time_text()}", chat_ids)
+                add_event(f"텔레그램 테스트 전송: {sent_count}명")
+                self.send_json({"message": f"텔레그램 테스트 메시지 {sent_count}명에게 전송됨"})
                 return
 
             self.send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
