@@ -251,6 +251,10 @@ HTML = r"""<!doctype html>
       margin-bottom: 10px;
     }
 
+    .file-import {
+      margin-bottom: 10px;
+    }
+
     .chips {
       display: flex;
       gap: 7px;
@@ -424,6 +428,10 @@ HTML = r"""<!doctype html>
           <input id="keywordInput" placeholder="감시할 키워드">
           <button id="addKeyword">추가</button>
         </div>
+        <input type="file" id="keywordFile" accept=".txt,text/plain" hidden>
+        <div class="file-import">
+          <button id="importKeywords">TXT 추가</button>
+        </div>
         <div class="chips" id="keywords"></div>
       </div>
 
@@ -432,6 +440,10 @@ HTML = r"""<!doctype html>
         <div class="inline-form">
           <input id="excludeInput" placeholder="제외할 단어">
           <button id="addExclude">추가</button>
+        </div>
+        <input type="file" id="excludeFile" accept=".txt,text/plain" hidden>
+        <div class="file-import">
+          <button id="importExcludes">TXT 추가</button>
         </div>
         <div class="chips" id="excludeKeywords"></div>
       </div>
@@ -670,6 +682,64 @@ HTML = r"""<!doctype html>
       await saveConfig(message);
     }
 
+    function parseListText(text) {
+      const seen = new Set();
+      const items = [];
+      text.split(/\r?\n/)
+        .map(value => value.replace(/^\ufeff/, "").trim())
+        .filter(Boolean)
+        .forEach(value => {
+          const key = value.toLocaleLowerCase();
+          if (seen.has(key)) return;
+          seen.add(key);
+          items.push(value);
+        });
+      return items;
+    }
+
+    async function readTextFile(file) {
+      const buffer = await file.arrayBuffer();
+      const decoders = [
+        () => new TextDecoder("utf-8", { fatal: true }),
+        () => new TextDecoder("euc-kr", { fatal: true }),
+        () => new TextDecoder("utf-8")
+      ];
+      let lastError = null;
+      for (const createDecoder of decoders) {
+        try {
+          return createDecoder().decode(buffer);
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      throw lastError || new Error("파일을 읽을 수 없습니다.");
+    }
+
+    async function importListFile(fileInputId, target, messagePrefix) {
+      const input = document.getElementById(fileInputId);
+      const file = input.files && input.files[0];
+      if (!file) return;
+
+      try {
+        const items = parseListText(await readTextFile(file));
+        const existing = new Set(target.map(value => String(value).toLocaleLowerCase()));
+        let added = 0;
+        items.forEach(item => {
+          const key = item.toLocaleLowerCase();
+          if (existing.has(key)) return;
+          existing.add(key);
+          target.push(item);
+          added += 1;
+        });
+        input.value = "";
+        renderConfig();
+        await saveConfig(`${messagePrefix} ${added}개 저장됨`);
+      } catch (error) {
+        input.value = "";
+        setMessage(error.message, "bad");
+      }
+    }
+
     function wireControls() {
       document.getElementById("addKeyword").addEventListener("click", async () => {
         try { await addItem("keywordInput", config.keywords, "키워드 저장됨"); } catch (error) { setMessage(error.message, "bad"); }
@@ -680,6 +750,10 @@ HTML = r"""<!doctype html>
           addItem("keywordInput", config.keywords, "키워드 저장됨").catch(error => setMessage(error.message, "bad"));
         }
       });
+      document.getElementById("importKeywords").addEventListener("click", () => document.getElementById("keywordFile").click());
+      document.getElementById("keywordFile").addEventListener("change", () => {
+        importListFile("keywordFile", config.keywords, "키워드").catch(error => setMessage(error.message, "bad"));
+      });
       document.getElementById("addExclude").addEventListener("click", async () => {
         try { await addItem("excludeInput", config.exclude_keywords, "제외 키워드 저장됨"); } catch (error) { setMessage(error.message, "bad"); }
       });
@@ -688,6 +762,10 @@ HTML = r"""<!doctype html>
           event.preventDefault();
           addItem("excludeInput", config.exclude_keywords, "제외 키워드 저장됨").catch(error => setMessage(error.message, "bad"));
         }
+      });
+      document.getElementById("importExcludes").addEventListener("click", () => document.getElementById("excludeFile").click());
+      document.getElementById("excludeFile").addEventListener("change", () => {
+        importListFile("excludeFile", config.exclude_keywords, "제외 키워드").catch(error => setMessage(error.message, "bad"));
       });
       document.getElementById("addFeed").addEventListener("click", async () => {
         const name = document.getElementById("feedName").value.trim();
