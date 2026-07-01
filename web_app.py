@@ -28,6 +28,7 @@ from news_alert import (
     load_dotenv,
     notify_console,
     notify_telegram,
+    parse_telegram_chat_ids,
     save_new_articles,
     sync_telegram_subscribers,
     telegram_message,
@@ -38,19 +39,46 @@ load_dotenv(BASE_DIR / ".env")
 HOST = os.environ.get("NEWS_ALERT_HOST", "127.0.0.1")
 PORT = env_int("NEWS_ALERT_PORT", 8765)
 KST = dt.timezone(dt.timedelta(hours=9))
-CONFIG_PATH = DEFAULT_CONFIG_PATH
+DEFAULT_PROFILE_ID = "main"
+PROFILE_DEFS = [
+    {
+        "id": "main",
+        "name": "기존봇",
+        "config_path": DEFAULT_CONFIG_PATH,
+        "database": "news_alerts.sqlite3",
+        "token_env": "TELEGRAM_BOT_TOKEN",
+        "chat_id_env": "TELEGRAM_CHAT_ID",
+        "chat_ids_env": "TELEGRAM_CHAT_IDS",
+    },
+    {
+        "id": "politics",
+        "name": "정치봇",
+        "config_path": BASE_DIR / "config.politics.local.json",
+        "database": "news_alerts_politics.sqlite3",
+        "token_env": "TELEGRAM_BOT_TOKEN_POLITICS",
+        "chat_id_env": "TELEGRAM_CHAT_ID_POLITICS",
+        "chat_ids_env": "TELEGRAM_CHAT_IDS_POLITICS",
+    },
+]
+PROFILES = {profile["id"]: profile for profile in PROFILE_DEFS}
 STATE_LOCK = threading.RLock()
 STOP_EVENT = threading.Event()
-EVENTS: deque[dict] = deque(maxlen=80)
-RUNTIME_STATE = {
-    "running": False,
-    "checking": False,
-    "last_check_at": None,
-    "next_check_at": None,
-    "last_total_count": 0,
-    "last_new_count": 0,
-    "last_error": None,
-}
+
+
+def new_runtime_state() -> dict:
+    return {
+        "running": False,
+        "checking": False,
+        "last_check_at": None,
+        "next_check_at": None,
+        "last_total_count": 0,
+        "last_new_count": 0,
+        "last_error": None,
+    }
+
+
+PROFILE_EVENTS = {profile["id"]: deque(maxlen=80) for profile in PROFILE_DEFS}
+PROFILE_STATES = {profile["id"]: new_runtime_state() for profile in PROFILE_DEFS}
 
 
 HTML = r"""<!doctype html>
@@ -170,6 +198,24 @@ HTML = r"""<!doctype html>
       gap: 8px;
       flex-wrap: wrap;
       justify-content: flex-end;
+    }
+
+    .profile-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 10px;
+    }
+
+    .profile-tabs button {
+      min-height: 30px;
+      background: var(--surface-2);
+    }
+
+    .profile-tabs button.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
     }
 
     .status-pill {
@@ -415,6 +461,7 @@ HTML = r"""<!doctype html>
       <div>
         <h1>뉴스 알림 대시보드</h1>
         <div class="meta-row" id="summary">불러오는 중</div>
+        <div class="profile-tabs" id="profileTabs"></div>
       </div>
       <div class="toolbar">
         <span class="status-pill"><span class="dot" id="statusDot"></span><span id="statusText">대기</span></span>
@@ -544,9 +591,17 @@ HTML = r"""<!doctype html>
 
   <script>
     let config = null;
+    let profiles = [];
+    let activeProfile = localStorage.getItem("newsAlertProfile") || "main";
+
+    function profilePath(path) {
+      if (!path.startsWith("/api/") || path === "/api/profiles") return path;
+      const separator = path.includes("?") ? "&" : "?";
+      return `${path}${separator}profile=${encodeURIComponent(activeProfile)}`;
+    }
 
     async function request(path, options = {}) {
-      const response = await fetch(path, {
+      const response = await fetch(profilePath(path), {
         headers: { "Content-Type": "application/json" },
         ...options
       });
@@ -569,6 +624,38 @@ HTML = r"""<!doctype html>
       const el = document.getElementById("formMessage");
       el.textContent = text;
       el.className = `message ${kind}`;
+    }
+
+    function renderProfiles() {
+      const el = document.getElementById("profileTabs");
+      if (!profiles.length) {
+        el.innerHTML = "";
+        return;
+      }
+      el.innerHTML = profiles.map(profile => `
+        <button class="${profile.id === activeProfile ? "active" : ""}" data-profile="${escapeHtml(profile.id)}">
+          ${escapeHtml(profile.name)}
+        </button>
+      `).join("");
+      el.querySelectorAll("button").forEach(button => {
+        button.addEventListener("click", async () => {
+          activeProfile = button.dataset.profile;
+          localStorage.setItem("newsAlertProfile", activeProfile);
+          renderProfiles();
+          setMessage("");
+          await loadAll();
+        });
+      });
+    }
+
+    async function loadProfiles() {
+      const data = await request("/api/profiles");
+      profiles = data.profiles || [];
+      if (!profiles.some(profile => profile.id === activeProfile)) {
+        activeProfile = profiles[0]?.id || "main";
+        localStorage.setItem("newsAlertProfile", activeProfile);
+      }
+      renderProfiles();
     }
 
     function ensureConfig() {
@@ -890,8 +977,13 @@ HTML = r"""<!doctype html>
       renderState(stateData);
     }
 
+    async function init() {
+      await loadProfiles();
+      await loadAll();
+    }
+
     wireControls();
-    loadAll().catch(error => setMessage(error.message, "bad"));
+    init().catch(error => setMessage(error.message, "bad"));
     setInterval(() => {
       loadState().catch(() => {});
       request("/api/articles?limit=40").then(data => renderArticles(data.articles)).catch(() => {});
@@ -915,9 +1007,36 @@ def local_time_text(value: dt.datetime | None = None) -> str:
     return value.astimezone(KST).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def add_event(message: str) -> None:
+def valid_profile_id(profile_id: str | None) -> str:
+    return profile_id if profile_id in PROFILES else DEFAULT_PROFILE_ID
+
+
+def profile_config_path(profile_id: str) -> Path:
+    return Path(PROFILES[valid_profile_id(profile_id)]["config_path"])
+
+
+def profile_token(profile_id: str) -> str:
+    token_env = PROFILES[valid_profile_id(profile_id)]["token_env"]
+    return os.environ.get(token_env, "").strip()
+
+
+def profile_manual_chat_ids(profile_id: str) -> list[str]:
+    profile = PROFILES[valid_profile_id(profile_id)]
+    return parse_telegram_chat_ids(
+        [
+            os.environ.get(profile["chat_id_env"], ""),
+            os.environ.get(profile["chat_ids_env"], ""),
+        ]
+    )
+
+
+def add_event(profile_id: str, message: str | None = None) -> None:
+    if message is None:
+        message = profile_id
+        profile_id = DEFAULT_PROFILE_ID
+    profile_id = valid_profile_id(profile_id)
     with STATE_LOCK:
-        EVENTS.appendleft({"time": now_kst().strftime("%H:%M:%S"), "message": message})
+        PROFILE_EVENTS[profile_id].appendleft({"time": now_kst().strftime("%H:%M:%S"), "message": message})
 
 
 def normalize_string_list(values) -> list[str]:
@@ -938,12 +1057,40 @@ def validate_fixed_time(value: str) -> bool:
     return 0 <= int(hour) <= 23 and 0 <= int(minute) <= 59
 
 
-def normalize_config(config: dict) -> dict:
-    config = dict(config or {})
-    config["keywords"] = normalize_string_list(config.get("keywords"))
-    config["exclude_keywords"] = normalize_string_list(config.get("exclude_keywords"))
+def default_config(profile_id: str) -> dict:
+    profile_id = valid_profile_id(profile_id)
+    return {
+        "keywords": [],
+        "exclude_keywords": [],
+        "naver": {
+            "enabled": True,
+            "display": 20,
+            "sort": "date",
+        },
+        "rss_feeds": [],
+        "scheduler": {
+            "enabled": True,
+            "poll_interval_seconds": 600,
+            "instant_alerts": True,
+            "fixed_time_alerts": False,
+            "fixed_times": ["09:00"],
+        },
+        "notifications": {
+            "console_enabled": True,
+            "telegram_enabled": True,
+        },
+        "database": PROFILES[profile_id]["database"],
+    }
 
-    naver = dict(config.get("naver") or {})
+
+def normalize_config(config: dict, profile_id: str = DEFAULT_PROFILE_ID) -> dict:
+    profile_id = valid_profile_id(profile_id)
+    defaults = default_config(profile_id)
+    config = dict(config or {})
+    config["keywords"] = normalize_string_list(config.get("keywords", defaults["keywords"]))
+    config["exclude_keywords"] = normalize_string_list(config.get("exclude_keywords", defaults["exclude_keywords"]))
+
+    naver = dict(config.get("naver") or defaults["naver"])
     naver["enabled"] = bool(naver.get("enabled", True))
     naver["display"] = max(1, min(100, int(naver.get("display", 20) or 20)))
     naver["sort"] = naver.get("sort") if naver.get("sort") in {"date", "sim"} else "date"
@@ -957,7 +1104,7 @@ def normalize_config(config: dict) -> dict:
             feeds.append({"name": name, "url": url})
     config["rss_feeds"] = feeds
 
-    scheduler = dict(config.get("scheduler") or {})
+    scheduler = dict(config.get("scheduler") or defaults["scheduler"])
     scheduler["enabled"] = bool(scheduler.get("enabled", True))
     scheduler["poll_interval_seconds"] = max(60, int(scheduler.get("poll_interval_seconds", 600) or 600))
     scheduler["instant_alerts"] = bool(scheduler.get("instant_alerts", True))
@@ -969,26 +1116,37 @@ def normalize_config(config: dict) -> dict:
     scheduler["fixed_times"] = fixed_times
     config["scheduler"] = scheduler
 
-    notifications = dict(config.get("notifications") or {})
+    notifications = dict(config.get("notifications") or defaults["notifications"])
     notifications["console_enabled"] = bool(notifications.get("console_enabled", True))
     notifications["telegram_enabled"] = bool(notifications.get("telegram_enabled", False))
     config["notifications"] = notifications
 
-    config["database"] = str(config.get("database") or "news_alerts.sqlite3")
+    config["database"] = str(config.get("database") or defaults["database"])
     return config
 
 
-def read_config() -> dict:
+def read_config(profile_id: str = DEFAULT_PROFILE_ID) -> dict:
+    profile_id = valid_profile_id(profile_id)
+    config_path = profile_config_path(profile_id)
     try:
-        return normalize_config(load_config(CONFIG_PATH))
+        if config_path.exists():
+            with config_path.open("r", encoding="utf-8") as f:
+                return normalize_config(json.load(f), profile_id)
+        if profile_id == DEFAULT_PROFILE_ID:
+            return normalize_config(load_config(DEFAULT_CONFIG_PATH), profile_id)
+        return normalize_config(default_config(profile_id), profile_id)
     except FileNotFoundError:
-        return normalize_config({})
+        return normalize_config(default_config(profile_id), profile_id)
 
 
-def write_config(config: dict) -> dict:
-    normalized = normalize_config(config)
-    CONFIG_PATH.write_text(json.dumps(normalized, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    add_event("설정 저장")
+def write_config(profile_id: str, config: dict) -> dict:
+    profile_id = valid_profile_id(profile_id)
+    normalized = normalize_config(config, profile_id)
+    profile_config_path(profile_id).write_text(
+        json.dumps(normalized, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    add_event(profile_id, "설정 저장")
     return normalized
 
 
@@ -996,11 +1154,11 @@ def db_path(config: dict) -> Path:
     return BASE_DIR / config.get("database", "news_alerts.sqlite3")
 
 
-def telegram_recipient_ids(config: dict) -> list[str]:
+def telegram_recipient_ids(profile_id: str, config: dict) -> list[str]:
     conn = init_db(db_path(config))
     try:
-        sync_telegram_subscribers(conn)
-        return get_telegram_chat_ids(conn)
+        sync_telegram_subscribers(conn, token=profile_token(profile_id))
+        return get_telegram_chat_ids(conn, profile_manual_chat_ids(profile_id))
     finally:
         conn.close()
 
@@ -1058,8 +1216,8 @@ def row_to_article(row: sqlite3.Row) -> Article:
     )
 
 
-def recent_articles(limit: int = 40) -> list[dict]:
-    config = read_config()
+def recent_articles(profile_id: str = DEFAULT_PROFILE_ID, limit: int = 40) -> list[dict]:
+    config = read_config(profile_id)
     with init_db(db_path(config)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
@@ -1090,8 +1248,8 @@ def articles_since(config: dict, since_iso: str | None) -> list[Article]:
     return [row_to_article(row) for row in rows]
 
 
-def send_telegram_text(text: str, chat_ids: list[str]) -> int:
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+def send_telegram_text(profile_id: str, text: str, chat_ids: list[str]) -> int:
+    token = profile_token(profile_id)
     if not token or not chat_ids:
         return 0
 
@@ -1102,7 +1260,7 @@ def send_telegram_text(text: str, chat_ids: list[str]) -> int:
     return sent_count
 
 
-def send_fixed_digest(config: dict, slot: str) -> None:
+def send_fixed_digest(profile_id: str, config: dict, slot: str) -> None:
     if not config["scheduler"]["fixed_time_alerts"]:
         return
     today_slot = f"{now_kst().strftime('%Y-%m-%d')} {slot}"
@@ -1119,30 +1277,32 @@ def send_fixed_digest(config: dict, slot: str) -> None:
         set_service_value(conn, "last_fixed_digest_at", now_utc_iso())
 
     if not articles:
-        add_event(f"고정 알림 {slot}: 새 기사 없음")
+        add_event(profile_id, f"고정 알림 {slot}: 새 기사 없음")
         return
 
     if config["notifications"]["telegram_enabled"]:
         text = f"[뉴스 요약] {slot} 기준 새 기사 {len(articles)}개"
         try:
-            chat_ids = telegram_recipient_ids(config)
+            chat_ids = telegram_recipient_ids(profile_id, config)
             if not chat_ids:
                 raise ValueError("텔레그램 구독자가 없습니다. 봇에 /start를 먼저 보내주세요.")
-            send_telegram_text(text, chat_ids)
-            notify_telegram(articles, chat_ids)
+            send_telegram_text(profile_id, text, chat_ids)
+            notify_telegram(articles, chat_ids, token=profile_token(profile_id))
             mark_notified(config, articles)
-            add_event(f"고정 알림 {slot}: {len(articles)}개 전송")
+            add_event(profile_id, f"고정 알림 {slot}: {len(articles)}개 전송")
         except Exception as exc:
-            add_event(f"고정 알림 실패: {exc}")
+            add_event(profile_id, f"고정 알림 실패: {exc}")
     else:
-        add_event(f"고정 알림 {slot}: {len(articles)}개, 텔레그램 꺼짐")
+        add_event(profile_id, f"고정 알림 {slot}: {len(articles)}개, 텔레그램 꺼짐")
 
 
-def perform_check(mark_seen: bool = False, reason: str = "manual") -> dict:
-    config = read_config()
+def perform_check(profile_id: str = DEFAULT_PROFILE_ID, mark_seen: bool = False, reason: str = "manual") -> dict:
+    profile_id = valid_profile_id(profile_id)
+    config = read_config(profile_id)
     with STATE_LOCK:
-        RUNTIME_STATE["checking"] = True
-        RUNTIME_STATE["last_error"] = None
+        state = PROFILE_STATES[profile_id]
+        state["checking"] = True
+        state["last_error"] = None
 
     try:
         articles = collect_articles(config)
@@ -1150,27 +1310,28 @@ def perform_check(mark_seen: bool = False, reason: str = "manual") -> dict:
             new_articles = save_new_articles(conn, articles, mark_seen=mark_seen)
 
         if mark_seen:
-            add_event(f"현재 결과 {len(articles)}개 저장")
+            add_event(profile_id, f"현재 결과 {len(articles)}개 저장")
         elif new_articles:
             if config["notifications"]["console_enabled"]:
                 notify_console(new_articles)
             if config["scheduler"]["instant_alerts"] and config["notifications"]["telegram_enabled"]:
-                chat_ids = telegram_recipient_ids(config)
+                chat_ids = telegram_recipient_ids(profile_id, config)
                 if not chat_ids:
                     raise ValueError("텔레그램 구독자가 없습니다. 봇에 /start를 먼저 보내주세요.")
-                notify_telegram(new_articles, chat_ids)
+                notify_telegram(new_articles, chat_ids, token=profile_token(profile_id))
                 mark_notified(config, new_articles)
-                add_event(f"새 기사 {len(new_articles)}개 즉시 전송")
+                add_event(profile_id, f"새 기사 {len(new_articles)}개 즉시 전송")
             else:
-                add_event(f"새 기사 {len(new_articles)}개 발견")
+                add_event(profile_id, f"새 기사 {len(new_articles)}개 발견")
         else:
-            add_event("새 기사 없음")
+            add_event(profile_id, "새 기사 없음")
 
         with STATE_LOCK:
-            RUNTIME_STATE["last_check_at"] = local_time_text()
-            RUNTIME_STATE["last_total_count"] = len(articles)
-            RUNTIME_STATE["last_new_count"] = 0 if mark_seen else len(new_articles)
-            RUNTIME_STATE["last_error"] = None
+            state = PROFILE_STATES[profile_id]
+            state["last_check_at"] = local_time_text()
+            state["last_total_count"] = len(articles)
+            state["last_new_count"] = 0 if mark_seen else len(new_articles)
+            state["last_error"] = None
 
         return {
             "total_count": len(articles),
@@ -1179,44 +1340,63 @@ def perform_check(mark_seen: bool = False, reason: str = "manual") -> dict:
         }
     except Exception as exc:
         with STATE_LOCK:
-            RUNTIME_STATE["last_error"] = str(exc)
-        add_event(f"검사 실패: {exc}")
+            PROFILE_STATES[profile_id]["last_error"] = str(exc)
+        add_event(profile_id, f"검사 실패: {exc}")
         traceback.print_exc()
         raise
     finally:
         with STATE_LOCK:
-            RUNTIME_STATE["checking"] = False
+            PROFILE_STATES[profile_id]["checking"] = False
 
 
 def scheduler_loop() -> None:
-    add_event("웹서비스 시작")
-    next_poll = time.monotonic() + 2
+    for profile_id in PROFILES:
+        add_event(profile_id, "웹서비스 시작")
+    next_polls = {profile_id: time.monotonic() + 2 for profile_id in PROFILES}
 
     while not STOP_EVENT.is_set():
-        config = read_config()
-        scheduler = config["scheduler"]
-        interval = scheduler["poll_interval_seconds"]
+        for profile_id in PROFILES:
+            config = read_config(profile_id)
+            scheduler = config["scheduler"]
+            interval = scheduler["poll_interval_seconds"]
 
-        with STATE_LOCK:
-            RUNTIME_STATE["running"] = scheduler["enabled"]
-            RUNTIME_STATE["next_check_at"] = (
-                local_time_text(dt.datetime.fromtimestamp(time.time() + max(0, next_poll - time.monotonic()), KST))
-                if scheduler["enabled"]
-                else None
-            )
+            with STATE_LOCK:
+                state = PROFILE_STATES[profile_id]
+                state["running"] = scheduler["enabled"]
+                state["next_check_at"] = (
+                    local_time_text(dt.datetime.fromtimestamp(time.time() + max(0, next_polls[profile_id] - time.monotonic()), KST))
+                    if scheduler["enabled"]
+                    else None
+                )
 
-        current_slot = now_kst().strftime("%H:%M")
-        if scheduler["enabled"] and current_slot in scheduler["fixed_times"]:
-            send_fixed_digest(config, current_slot)
+            current_slot = now_kst().strftime("%H:%M")
+            if scheduler["enabled"] and current_slot in scheduler["fixed_times"]:
+                send_fixed_digest(profile_id, config, current_slot)
 
-        if scheduler["enabled"] and time.monotonic() >= next_poll:
-            try:
-                perform_check(mark_seen=False, reason="schedule")
-            except Exception:
-                pass
-            next_poll = time.monotonic() + interval
+            if scheduler["enabled"] and time.monotonic() >= next_polls[profile_id]:
+                try:
+                    perform_check(profile_id, mark_seen=False, reason="schedule")
+                except Exception:
+                    pass
+                next_polls[profile_id] = time.monotonic() + interval
 
         STOP_EVENT.wait(5)
+
+
+def profile_from_query(parsed: urllib.parse.ParseResult) -> str:
+    params = urllib.parse.parse_qs(parsed.query)
+    return valid_profile_id(params.get("profile", [DEFAULT_PROFILE_ID])[0])
+
+
+def profile_summaries() -> list[dict]:
+    return [
+        {
+            "id": profile["id"],
+            "name": profile["name"],
+            "token_configured": bool(profile_token(profile["id"])),
+        }
+        for profile in PROFILE_DEFS
+    ]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1250,6 +1430,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
+        profile_id = profile_from_query(parsed)
         if parsed.path == "/":
             self.send_html()
             return
@@ -1258,23 +1439,27 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"ok": True})
             return
 
+        if parsed.path == "/api/profiles":
+            self.send_json({"profiles": profile_summaries(), "default_profile": DEFAULT_PROFILE_ID})
+            return
+
         if parsed.path == "/api/config":
-            self.send_json({"config": read_config()})
+            self.send_json({"config": read_config(profile_id)})
             return
 
         if parsed.path == "/api/articles":
             params = urllib.parse.parse_qs(parsed.query)
             limit = int(params.get("limit", ["40"])[0])
-            self.send_json({"articles": recent_articles(limit)})
+            self.send_json({"articles": recent_articles(profile_id, limit)})
             return
 
         if parsed.path == "/api/state":
             with STATE_LOCK:
-                state = dict(RUNTIME_STATE)
-                events = list(EVENTS)
-            config = read_config()
-            token_present = bool(os.environ.get("TELEGRAM_BOT_TOKEN"))
-            recipient_count = len(telegram_recipient_ids(config)) if token_present else 0
+                state = dict(PROFILE_STATES[profile_id])
+                events = list(PROFILE_EVENTS[profile_id])
+            config = read_config(profile_id)
+            token_present = bool(profile_token(profile_id))
+            recipient_count = len(telegram_recipient_ids(profile_id, config)) if token_present else 0
             self.send_json(
                 {
                     "state": state,
@@ -1290,31 +1475,32 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
+        profile_id = profile_from_query(parsed)
         try:
             if parsed.path == "/api/config":
-                config = write_config(self.read_json_body())
+                config = write_config(profile_id, self.read_json_body())
                 self.send_json({"config": config})
                 return
 
             if parsed.path == "/api/check-now":
-                result = perform_check(mark_seen=False, reason="manual")
+                result = perform_check(profile_id, mark_seen=False, reason="manual")
                 self.send_json(result)
                 return
 
             if parsed.path == "/api/mark-seen":
-                result = perform_check(mark_seen=True, reason="manual")
+                result = perform_check(profile_id, mark_seen=True, reason="manual")
                 self.send_json(result)
                 return
 
             if parsed.path == "/api/test-telegram":
-                config = read_config()
-                if not os.environ.get("TELEGRAM_BOT_TOKEN"):
+                config = read_config(profile_id)
+                if not profile_token(profile_id):
                     raise ValueError("텔레그램 토큰이 없습니다.")
-                chat_ids = telegram_recipient_ids(config)
+                chat_ids = telegram_recipient_ids(profile_id, config)
                 if not chat_ids:
                     raise ValueError("텔레그램 구독자가 없습니다. 봇에 /start를 먼저 보내주세요.")
-                sent_count = send_telegram_text(f"뉴스 알림 테스트 전송\n{local_time_text()}", chat_ids)
-                add_event(f"텔레그램 테스트 전송: {sent_count}명")
+                sent_count = send_telegram_text(profile_id, f"뉴스 알림 테스트 전송\n{local_time_text()}", chat_ids)
+                add_event(profile_id, f"텔레그램 테스트 전송: {sent_count}명")
                 self.send_json({"message": f"텔레그램 테스트 메시지 {sent_count}명에게 전송됨"})
                 return
 
@@ -1325,7 +1511,8 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> int:
     configure_stdio()
-    write_config(read_config())
+    for profile_id in PROFILES:
+        write_config(profile_id, read_config(profile_id))
 
     worker = threading.Thread(target=scheduler_loop, name="news-alert-scheduler", daemon=True)
     worker.start()

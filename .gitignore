@@ -1,5 +1,6 @@
 .env
 config.local.json
+config.politics.local.json
 *.sqlite3
 *.log
 data/

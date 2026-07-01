@@ -339,11 +339,7 @@ def set_telegram_state(conn: sqlite3.Connection, key: str, value: str) -> None:
     )
 
 
-def parse_telegram_chat_ids_from_env() -> list[str]:
-    raw_values = [
-        os.environ.get("TELEGRAM_CHAT_IDS", ""),
-        os.environ.get("TELEGRAM_CHAT_ID", ""),
-    ]
+def parse_telegram_chat_ids(raw_values: list[str]) -> list[str]:
     chat_ids: list[str] = []
     for raw_value in raw_values:
         for chat_id in re.split(r"[\s,;]+", raw_value.strip()):
@@ -352,8 +348,17 @@ def parse_telegram_chat_ids_from_env() -> list[str]:
     return chat_ids
 
 
-def get_telegram_chat_ids(conn: sqlite3.Connection) -> list[str]:
-    chat_ids = parse_telegram_chat_ids_from_env()
+def parse_telegram_chat_ids_from_env() -> list[str]:
+    return parse_telegram_chat_ids(
+        [
+            os.environ.get("TELEGRAM_CHAT_IDS", ""),
+            os.environ.get("TELEGRAM_CHAT_ID", ""),
+        ]
+    )
+
+
+def get_telegram_chat_ids(conn: sqlite3.Connection, manual_chat_ids: list[str] | None = None) -> list[str]:
+    chat_ids = list(manual_chat_ids) if manual_chat_ids is not None else parse_telegram_chat_ids_from_env()
     cursor = conn.execute(
         """
         SELECT chat_id
@@ -435,8 +440,8 @@ def stop_telegram_subscriber(conn: sqlite3.Connection, message: dict) -> str:
     return chat_id
 
 
-def sync_telegram_subscribers(conn: sqlite3.Connection) -> None:
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+def sync_telegram_subscribers(conn: sqlite3.Connection, token: str | None = None) -> None:
+    token = token or os.environ.get("TELEGRAM_BOT_TOKEN")
     if not token:
         return
 
@@ -558,8 +563,8 @@ def notify_console(articles: list[Article]) -> None:
         print(format_article(article))
 
 
-def notify_telegram(articles: list[Article], chat_ids: list[str]) -> None:
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+def notify_telegram(articles: list[Article], chat_ids: list[str], token: str | None = None) -> None:
+    token = token or os.environ.get("TELEGRAM_BOT_TOKEN")
     if not token or not chat_ids or not articles:
         return
 
