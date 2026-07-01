@@ -1,0 +1,20 @@
+{
+  "keywords": [
+    "금융위원회",
+    "가계부채",
+    "부동산 PF"
+  ],
+  "exclude_keywords": [],
+  "naver": {
+    "enabled": true,
+    "display": 20,
+    "sort": "date"
+  },
+  "rss_feeds": [
+    {
+      "name": "금융위원회 보도자료",
+      "url": "http://www.fsc.go.kr/about/fsc_bbs_rss/?fid=0111"
+    }
+  ],
+  "database": "news_alerts.sqlite3"
+}
