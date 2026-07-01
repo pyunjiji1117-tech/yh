@@ -20,6 +20,7 @@ from news_alert import (
     DEFAULT_CONFIG_PATH,
     collect_articles,
     configure_stdio,
+    env_int,
     format_article,
     get_telegram_chat_ids,
     init_db,
@@ -33,8 +34,9 @@ from news_alert import (
 )
 
 
-HOST = "127.0.0.1"
-PORT = 8765
+load_dotenv(BASE_DIR / ".env")
+HOST = os.environ.get("NEWS_ALERT_HOST", "127.0.0.1")
+PORT = env_int("NEWS_ALERT_PORT", 8765)
 KST = dt.timezone(dt.timedelta(hours=9))
 CONFIG_PATH = DEFAULT_CONFIG_PATH
 STATE_LOCK = threading.RLock()
@@ -1252,6 +1254,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_html()
             return
 
+        if parsed.path == "/api/health":
+            self.send_json({"ok": True})
+            return
+
         if parsed.path == "/api/config":
             self.send_json({"config": read_config()})
             return
@@ -1319,7 +1325,6 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> int:
     configure_stdio()
-    load_dotenv(BASE_DIR / ".env")
     write_config(read_config())
 
     worker = threading.Thread(target=scheduler_loop, name="news-alert-scheduler", daemon=True)

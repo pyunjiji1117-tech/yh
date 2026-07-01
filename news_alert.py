@@ -1,5 +1,6 @@
 import argparse
 import datetime as dt
+import email.utils
 import html
 import json
 import os
@@ -18,6 +19,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATE_CONFIG_PATH = BASE_DIR / "config.json"
 DEFAULT_CONFIG_PATH = BASE_DIR / "config.local.json"
+KST = dt.timezone(dt.timedelta(hours=9))
 
 
 def configure_stdio() -> None:
@@ -65,12 +67,59 @@ def load_config(path: Path) -> dict:
         return json.load(f)
 
 
+def env_int(name: str, default: int) -> int:
+    raw_value = os.environ.get(name, "").strip()
+    if not raw_value:
+        return default
+    try:
+        return int(raw_value)
+    except ValueError:
+        print(f"[WARN] {name} must be a number. Using {default}.", file=sys.stderr)
+        return default
+
+
 def clean_text(value: str | None) -> str:
     if not value:
         return ""
     text = re.sub(r"<[^>]+>", "", value)
     text = html.unescape(text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def parse_article_datetime(value: str) -> dt.datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = email.utils.parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        parsed = None
+
+    if parsed is None:
+        try:
+            parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=KST)
+    return parsed
+
+
+def compact_article_time(article: "Article") -> str:
+    parsed = parse_article_datetime(article.published_at)
+    if parsed:
+        return parsed.astimezone(KST).strftime("%Y-%m-%d %H:%M")
+    return article.published_at or "-"
+
+
+def notification_order(articles: list["Article"]) -> list["Article"]:
+    def sort_key(article: Article):
+        parsed = parse_article_datetime(article.published_at)
+        if parsed:
+            return (0, parsed.timestamp(), article.title)
+        return (1, article.published_at, article.title)
+
+    return sorted(articles, key=sort_key)
 
 
 def find_keywords(text: str, keywords: list[str]) -> tuple[str, ...]:
@@ -268,7 +317,7 @@ def telegram_message(token: str, chat_id: str, text: str) -> None:
         {
             "chat_id": chat_id,
             "text": text,
-            "disable_web_page_preview": "false",
+            "disable_web_page_preview": "true",
         },
     )
 
@@ -487,6 +536,18 @@ def format_article(article: Article) -> str:
     return "\n".join(lines)
 
 
+def format_telegram_article(article: Article) -> str:
+    keyword_text = ", ".join(article.matched_keywords) or "-"
+    lines = [
+        f"제목: {article.title}",
+        f"시간: {compact_article_time(article)}",
+        f"키워드: {keyword_text}",
+    ]
+    if article.url:
+        lines.append(f"링크: {article.url}")
+    return "\n".join(lines)
+
+
 def notify_console(articles: list[Article]) -> None:
     if not articles:
         print("새 기사 없음")
@@ -502,10 +563,11 @@ def notify_telegram(articles: list[Article], chat_ids: list[str]) -> None:
     if not token or not chat_ids or not articles:
         return
 
+    ordered_articles = notification_order(articles)
     for chat_id in chat_ids:
-        for article in articles:
+        for article in ordered_articles:
             try:
-                telegram_message(token, chat_id, format_article(article))
+                telegram_message(token, chat_id, format_telegram_article(article))
             except Exception as exc:
                 print(f"[WARN] Telegram notification failed for chat {chat_id}: {exc}", file=sys.stderr)
 

@@ -1,23 +1,25 @@
 import argparse
+import os
 import socket
 import subprocess
 import sys
 import time
 import urllib.request
 import webbrowser
-from pathlib import Path
+
+from news_alert import BASE_DIR, env_int, load_dotenv
 
 
-BASE_DIR = Path(__file__).resolve().parent
-HOST = "127.0.0.1"
-PORT = 8765
+load_dotenv(BASE_DIR / ".env")
+HOST = os.environ.get("NEWS_ALERT_HOST", "127.0.0.1")
+PORT = env_int("NEWS_ALERT_PORT", 8765)
 URL = f"http://{HOST}:{PORT}"
 
 
 def server_responding(timeout: float = 1.5) -> bool:
     try:
-        with urllib.request.urlopen(f"{URL}/api/state", timeout=timeout) as response:
-            response.read(1)
+        with urllib.request.urlopen(f"{URL}/api/health", timeout=timeout) as response:
+            response.read()
         return True
     except Exception:
         return False
