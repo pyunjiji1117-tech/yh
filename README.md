@@ -52,6 +52,18 @@ python news_alert.py --once
 python news_alert.py --loop --interval 600
 ```
 
+## Telegram subscribers
+
+`.env`에 `TELEGRAM_BOT_TOKEN`을 넣고 프로그램을 실행해두면, 사용자가 봇에서 `/start`를 보냈을 때 해당 `chat_id`가 `news_alerts.sqlite3`의 `telegram_subscribers` 테이블에 저장됩니다.
+
+뉴스 알림은 다음 대상에게 발송됩니다.
+
+- DB에 저장된 활성 구독자
+- `.env`의 `TELEGRAM_CHAT_ID`
+- `.env`의 `TELEGRAM_CHAT_IDS`에 쉼표로 입력한 chat_id 목록
+
+구독 해제는 사용자가 봇에 `/stop`을 보내면 됩니다.
+
 ## 알림
 
 기본은 콘솔 출력입니다. `.env`에 `TELEGRAM_BOT_TOKEN`과 `TELEGRAM_CHAT_ID`를 넣으면 텔레그램으로도 발송합니다.

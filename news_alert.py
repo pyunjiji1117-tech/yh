@@ -222,13 +222,221 @@ def init_db(db_path: Path) -> sqlite3.Connection:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS telegram_subscribers (
+            chat_id TEXT PRIMARY KEY,
+            chat_type TEXT,
+            username TEXT,
+            first_name TEXT,
+            last_name TEXT,
+            subscribed_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS telegram_state (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+        """
+    )
     conn.commit()
     return conn
 
 
+def utc_now() -> str:
+    return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+
+
+def telegram_api_request(token: str, method: str, params: dict[str, str] | None = None, timeout: int = 15) -> dict:
+    endpoint = f"https://api.telegram.org/bot{token}/{method}"
+    data = urllib.parse.urlencode(params or {}).encode("utf-8")
+    request = urllib.request.Request(endpoint, data=data, method="POST")
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        charset = response.headers.get_content_charset() or "utf-8"
+        return json.loads(response.read().decode(charset))
+
+
+def telegram_message(token: str, chat_id: str, text: str) -> None:
+    telegram_api_request(
+        token,
+        "sendMessage",
+        {
+            "chat_id": chat_id,
+            "text": text,
+            "disable_web_page_preview": "false",
+        },
+    )
+
+
+def get_telegram_state(conn: sqlite3.Connection, key: str) -> str | None:
+    cursor = conn.execute("SELECT value FROM telegram_state WHERE key = ?", (key,))
+    row = cursor.fetchone()
+    return row[0] if row else None
+
+
+def set_telegram_state(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO telegram_state (key, value)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """,
+        (key, value),
+    )
+
+
+def parse_telegram_chat_ids_from_env() -> list[str]:
+    raw_values = [
+        os.environ.get("TELEGRAM_CHAT_IDS", ""),
+        os.environ.get("TELEGRAM_CHAT_ID", ""),
+    ]
+    chat_ids: list[str] = []
+    for raw_value in raw_values:
+        for chat_id in re.split(r"[\s,;]+", raw_value.strip()):
+            if chat_id and chat_id not in chat_ids:
+                chat_ids.append(chat_id)
+    return chat_ids
+
+
+def get_telegram_chat_ids(conn: sqlite3.Connection) -> list[str]:
+    chat_ids = parse_telegram_chat_ids_from_env()
+    cursor = conn.execute(
+        """
+        SELECT chat_id
+        FROM telegram_subscribers
+        WHERE is_active = 1
+        ORDER BY subscribed_at, chat_id
+        """
+    )
+    for (chat_id,) in cursor.fetchall():
+        if chat_id not in chat_ids:
+            chat_ids.append(chat_id)
+    return chat_ids
+
+
+def extract_telegram_command(text: str | None) -> str:
+    if not text:
+        return ""
+    first_word = text.strip().split(maxsplit=1)[0].casefold()
+    if not first_word.startswith("/"):
+        return ""
+    return first_word.split("@", 1)[0]
+
+
+def save_telegram_subscriber(conn: sqlite3.Connection, message: dict) -> str:
+    chat = message.get("chat") or {}
+    user = message.get("from") or {}
+    chat_id = str(chat.get("id") or "")
+    if not chat_id:
+        return ""
+
+    now = utc_now()
+    cursor = conn.execute("SELECT 1 FROM telegram_subscribers WHERE chat_id = ?", (chat_id,))
+    exists = cursor.fetchone() is not None
+    values = (
+        chat.get("type", ""),
+        chat.get("username") or user.get("username") or "",
+        chat.get("first_name") or user.get("first_name") or chat.get("title") or "",
+        chat.get("last_name") or user.get("last_name") or "",
+        now,
+        chat_id,
+    )
+    if exists:
+        conn.execute(
+            """
+            UPDATE telegram_subscribers
+            SET chat_type = ?, username = ?, first_name = ?, last_name = ?,
+                last_seen_at = ?, is_active = 1
+            WHERE chat_id = ?
+            """,
+            values,
+        )
+    else:
+        conn.execute(
+            """
+            INSERT INTO telegram_subscribers (
+                chat_id, chat_type, username, first_name, last_name,
+                subscribed_at, last_seen_at, is_active
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+            """,
+            (chat_id, values[0], values[1], values[2], values[3], now, now),
+        )
+    return chat_id
+
+
+def stop_telegram_subscriber(conn: sqlite3.Connection, message: dict) -> str:
+    chat = message.get("chat") or {}
+    chat_id = str(chat.get("id") or "")
+    if not chat_id:
+        return ""
+    conn.execute(
+        """
+        UPDATE telegram_subscribers
+        SET is_active = 0, last_seen_at = ?
+        WHERE chat_id = ?
+        """,
+        (utc_now(), chat_id),
+    )
+    return chat_id
+
+
+def sync_telegram_subscribers(conn: sqlite3.Connection) -> None:
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    if not token:
+        return
+
+    params: dict[str, str] = {
+        "timeout": "0",
+        "allowed_updates": json.dumps(["message"]),
+    }
+    last_update_id = get_telegram_state(conn, "telegram_last_update_id")
+    if last_update_id:
+        params["offset"] = str(int(last_update_id) + 1)
+
+    try:
+        response = telegram_api_request(token, "getUpdates", params=params)
+    except Exception as exc:
+        print(f"[WARN] Telegram subscriber sync failed: {exc}", file=sys.stderr)
+        return
+
+    updates = response.get("result", [])
+    max_update_id = int(last_update_id) if last_update_id else None
+    for update in updates:
+        update_id = update.get("update_id")
+        if isinstance(update_id, int):
+            max_update_id = update_id if max_update_id is None else max(max_update_id, update_id)
+
+        message = update.get("message") or {}
+        command = extract_telegram_command(message.get("text"))
+        if command == "/start":
+            chat_id = save_telegram_subscriber(conn, message)
+            if chat_id:
+                try:
+                    telegram_message(token, chat_id, "News alerts are now enabled. Send /stop to unsubscribe.")
+                except Exception as exc:
+                    print(f"[WARN] Telegram welcome message failed: {exc}", file=sys.stderr)
+        elif command == "/stop":
+            chat_id = stop_telegram_subscriber(conn, message)
+            if chat_id:
+                try:
+                    telegram_message(token, chat_id, "News alerts are now disabled. Send /start to subscribe again.")
+                except Exception as exc:
+                    print(f"[WARN] Telegram stop message failed: {exc}", file=sys.stderr)
+
+    if max_update_id is not None:
+        set_telegram_state(conn, "telegram_last_update_id", str(max_update_id))
+    conn.commit()
+
+
 def save_new_articles(conn: sqlite3.Connection, articles: list[Article], mark_seen: bool) -> list[Article]:
     new_articles: list[Article] = []
-    now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    now = utc_now()
 
     for article in articles:
         if not article.key:
@@ -289,27 +497,17 @@ def notify_console(articles: list[Article]) -> None:
         print(format_article(article))
 
 
-def notify_telegram(articles: list[Article]) -> None:
+def notify_telegram(articles: list[Article], chat_ids: list[str]) -> None:
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-    if not token or not chat_id or not articles:
+    if not token or not chat_ids or not articles:
         return
 
-    endpoint = f"https://api.telegram.org/bot{token}/sendMessage"
-    for article in articles:
-        data = urllib.parse.urlencode(
-            {
-                "chat_id": chat_id,
-                "text": format_article(article),
-                "disable_web_page_preview": "false",
-            }
-        ).encode("utf-8")
-        request = urllib.request.Request(endpoint, data=data, method="POST")
-        try:
-            with urllib.request.urlopen(request, timeout=15) as response:
-                response.read()
-        except Exception as exc:
-            print(f"[WARN] Telegram notification failed: {exc}", file=sys.stderr)
+    for chat_id in chat_ids:
+        for article in articles:
+            try:
+                telegram_message(token, chat_id, format_article(article))
+            except Exception as exc:
+                print(f"[WARN] Telegram notification failed for chat {chat_id}: {exc}", file=sys.stderr)
 
 
 def collect_articles(config: dict) -> list[Article]:
@@ -334,15 +532,20 @@ def run_once(config: dict, mark_seen: bool = False) -> int:
     db_path = BASE_DIR / config.get("database", "news_alerts.sqlite3")
     articles = collect_articles(config)
 
-    with init_db(db_path) as conn:
+    conn = init_db(db_path)
+    try:
+        sync_telegram_subscribers(conn)
         new_articles = save_new_articles(conn, articles, mark_seen=mark_seen)
+        telegram_chat_ids = get_telegram_chat_ids(conn)
+    finally:
+        conn.close()
 
     if mark_seen:
         print(f"기존 기사 {len(articles)}개를 알림 없이 저장했습니다.")
         return 0
 
     notify_console(new_articles)
-    notify_telegram(new_articles)
+    notify_telegram(new_articles, telegram_chat_ids)
     return len(new_articles)
 
 
