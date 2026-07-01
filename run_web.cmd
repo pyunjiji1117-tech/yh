@@ -1,4 +1,6 @@
 @echo off
 cd /d "%~dp0"
-python web_app.py
+set "PYTHON_EXE=python"
+if exist ".venv\Scripts\python.exe" set "PYTHON_EXE=.venv\Scripts\python.exe"
+"%PYTHON_EXE%" web_app.py
 pause
