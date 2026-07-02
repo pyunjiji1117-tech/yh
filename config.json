@@ -13,6 +13,10 @@
     "display": 20,
     "sort": "date"
   },
+  "media_filter": {
+    "enabled": false,
+    "allowed_domains": []
+  },
   "rss_feeds": [
     {
       "name": "금융위원회 보도자료",
@@ -22,6 +26,8 @@
   "scheduler": {
     "enabled": true,
     "poll_interval_seconds": 600,
+    "interval_rules_enabled": false,
+    "interval_rules": [],
     "instant_alerts": true,
     "fixed_time_alerts": false,
     "fixed_times": [

@@ -18,6 +18,7 @@ from news_alert import (
     Article,
     BASE_DIR,
     DEFAULT_CONFIG_PATH,
+    article_domain,
     collect_articles,
     configure_stdio,
     env_int,
@@ -71,6 +72,7 @@ def new_runtime_state() -> dict:
         "checking": False,
         "last_check_at": None,
         "next_check_at": None,
+        "current_interval_seconds": None,
         "last_total_count": 0,
         "last_new_count": 0,
         "last_error": None,
@@ -353,6 +355,241 @@ HTML = r"""<!doctype html>
       align-items: center;
     }
 
+    .schedule-box {
+      margin-top: 12px;
+      border: 1px solid #cfe0ea;
+      border-radius: 8px;
+      background: linear-gradient(180deg, #f7fbfd, #eef6f9);
+      padding: 12px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .schedule-box strong {
+      display: block;
+      line-height: 1.35;
+    }
+
+    .schedule-box small {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
+    .modal-backdrop[hidden] {
+      display: none;
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      display: grid;
+      place-items: center;
+      padding: 18px;
+      background: rgba(24, 34, 49, .38);
+    }
+
+    .modal {
+      width: min(760px, 100%);
+      max-height: min(720px, calc(100vh - 36px));
+      overflow: hidden;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 18px 42px rgba(24, 34, 49, .24);
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+    }
+
+    .modal-header,
+    .modal-footer {
+      padding: 14px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .modal-footer {
+      border-top: 1px solid var(--line);
+      border-bottom: 0;
+      justify-content: flex-end;
+    }
+
+    .modal-body {
+      padding: 16px;
+      overflow: auto;
+      display: grid;
+      gap: 14px;
+    }
+
+    .schedule-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(120px, auto);
+      gap: 12px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #fbfcfe;
+    }
+
+    .schedule-head strong,
+    .schedule-head small {
+      display: block;
+      line-height: 1.4;
+    }
+
+    .schedule-head small {
+      margin-top: 3px;
+      color: var(--muted);
+    }
+
+    .schedule-presets,
+    .schedule-brushes {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .schedule-presets button,
+    .schedule-brushes button {
+      min-height: 32px;
+    }
+
+    .schedule-brushes button.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    .planner-note {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .day-planner {
+      display: grid;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: 6px;
+    }
+
+    .hour-slot {
+      min-height: 58px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 7px 4px;
+      display: grid;
+      place-items: center;
+      align-content: center;
+      gap: 3px;
+      text-align: center;
+      color: var(--text);
+      user-select: none;
+    }
+
+    .hour-slot:hover {
+      border-color: var(--accent);
+    }
+
+    .hour-slot strong {
+      font-size: 13px;
+      line-height: 1;
+    }
+
+    .hour-slot span {
+      font-size: 11px;
+      line-height: 1.2;
+      color: var(--muted);
+    }
+
+    .hour-slot.interval-default {
+      background: #fff;
+    }
+
+    .hour-slot.interval-fast {
+      border-color: #7ac7a5;
+      background: #e9f8f1;
+    }
+
+    .hour-slot.interval-medium {
+      border-color: #86aef2;
+      background: #edf4ff;
+    }
+
+    .hour-slot.interval-slow {
+      border-color: #e4b461;
+      background: #fff5df;
+    }
+
+    .hour-slot.interval-quiet {
+      border-color: #bcc7d6;
+      background: #f1f4f8;
+    }
+
+    .day-planner.disabled .hour-slot {
+      opacity: .48;
+      cursor: not-allowed;
+    }
+
+    .schedule-empty {
+      min-height: 76px;
+    }
+
+    .modal-message {
+      color: var(--muted);
+      min-height: 20px;
+    }
+
+    .modal-message.bad {
+      color: var(--bad);
+    }
+
+    .media-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 10px 0;
+    }
+
+    .media-options {
+      display: grid;
+      gap: 8px;
+      max-height: 280px;
+      overflow: auto;
+    }
+
+    .media-option {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 8px;
+      align-items: start;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 9px;
+      background: #fbfcfe;
+    }
+
+    .media-option strong {
+      display: block;
+      overflow-wrap: anywhere;
+      line-height: 1.35;
+    }
+
+    .media-option small {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
     .meta-row {
       display: flex;
       flex-wrap: wrap;
@@ -449,6 +686,15 @@ HTML = r"""<!doctype html>
         grid-template-columns: 1fr;
       }
 
+      .schedule-box,
+      .schedule-head {
+        grid-template-columns: 1fr;
+      }
+
+      .day-planner {
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+      }
+
       button.icon {
         width: 100%;
       }
@@ -504,11 +750,13 @@ HTML = r"""<!doctype html>
         <h2>검사와 알림</h2>
         <div class="field-grid">
           <div class="field">
-            <label for="interval">검사 간격</label>
+            <label for="interval">기본 확인 주기</label>
             <select id="interval">
               <option value="60">1분</option>
+              <option value="180">3분</option>
               <option value="300">5분</option>
               <option value="600">10분</option>
+              <option value="900">15분</option>
               <option value="1800">30분</option>
               <option value="3600">1시간</option>
             </select>
@@ -517,6 +765,13 @@ HTML = r"""<!doctype html>
             <label for="fixedTimes">고정 알림 시간</label>
             <input id="fixedTimes" placeholder="09:00, 18:00">
           </div>
+        </div>
+        <div class="schedule-box">
+          <div>
+            <strong>시간대별 확인 주기</strong>
+            <small id="scheduleSummary">기본 주기 사용</small>
+          </div>
+          <button id="openSchedule">상세 설정</button>
         </div>
         <div class="checkline">
           <input type="checkbox" id="schedulerEnabled">
@@ -560,6 +815,23 @@ HTML = r"""<!doctype html>
       </div>
 
       <div class="panel">
+        <h2>매체 필터</h2>
+        <div class="checkline">
+          <input type="checkbox" id="mediaFilterEnabled">
+          <label for="mediaFilterEnabled">선택한 매체만 알림</label>
+        </div>
+        <div class="media-actions">
+          <button id="refreshMedia">현재 결과 확인</button>
+          <button id="selectAllMedia">전체 선택</button>
+          <button id="clearMedia">선택 해제</button>
+        </div>
+        <div class="meta-row">
+          <span id="mediaSummary">-</span>
+        </div>
+        <div class="media-options" id="mediaOptions"></div>
+      </div>
+
+      <div class="panel">
         <h2>전송</h2>
         <div class="checkline">
           <input type="checkbox" id="telegramEnabled">
@@ -589,10 +861,59 @@ HTML = r"""<!doctype html>
     </section>
   </main>
 
+  <div class="modal-backdrop" id="scheduleModal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="scheduleTitle">
+      <div class="modal-header">
+        <h2 id="scheduleTitle">시간대별 확인 주기</h2>
+        <button class="icon" id="closeSchedule" title="닫기">x</button>
+      </div>
+      <div class="modal-body">
+        <div class="schedule-head">
+          <div>
+            <strong>기본 확인 주기</strong>
+            <small id="modalBaseInterval">10분</small>
+          </div>
+          <div class="checkline">
+            <input type="checkbox" id="intervalRulesEnabled">
+            <label for="intervalRulesEnabled">상세 설정 사용</label>
+          </div>
+        </div>
+        <div class="schedule-presets">
+          <button data-preset="rush">아침·저녁 집중</button>
+          <button data-preset="office">업무시간 집중</button>
+          <button data-preset="quietNight">새벽 느리게</button>
+          <button data-preset="clear">기본 주기만</button>
+        </div>
+        <div>
+          <div class="planner-note">아래에서 적용할 확인 간격을 고른 뒤, 시간 블록을 눌러 지정합니다.</div>
+          <div class="schedule-brushes" id="scheduleBrushes"></div>
+        </div>
+        <div class="day-planner" id="schedulePlanner"></div>
+        <div class="modal-message" id="scheduleMessage"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="cancelSchedule">취소</button>
+        <button class="primary" id="saveSchedule">저장</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     let config = null;
     let profiles = [];
+    let mediaOptions = [];
+    let scheduleDraft = null;
+    let scheduleBrush = 60;
+    let schedulePainting = false;
     let activeProfile = localStorage.getItem("newsAlertProfile") || "main";
+    const intervalOptions = [
+      [null, "기본"],
+      [60, "1분"],
+      [300, "5분"],
+      [600, "10분"],
+      [1800, "30분"],
+      [3600, "1시간"]
+    ];
 
     function profilePath(path) {
       if (!path.startsWith("/api/") || path === "/api/profiles") return path;
@@ -624,6 +945,222 @@ HTML = r"""<!doctype html>
       const el = document.getElementById("formMessage");
       el.textContent = text;
       el.className = `message ${kind}`;
+    }
+
+    function intervalText(seconds) {
+      const value = Number(seconds || 600);
+      if (value % 3600 === 0) return `${value / 3600}시간`;
+      if (value % 60 === 0) return `${value / 60}분`;
+      return `${value}초`;
+    }
+
+    function plannerIntervalText(value) {
+      return value ? intervalText(value) : "기본";
+    }
+
+    function hourText(hour) {
+      return `${String(hour % 24).padStart(2, "0")}:00`;
+    }
+
+    function timeToMinutes(value) {
+      const match = String(value || "").match(/^(\d{2}):(\d{2})$/);
+      if (!match) return null;
+      const hour = Number(match[1]);
+      const minute = Number(match[2]);
+      if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+      return hour * 60 + minute;
+    }
+
+    function expandedRanges(start, end) {
+      const startMinute = timeToMinutes(start);
+      const endMinute = timeToMinutes(end);
+      if (startMinute === null || endMinute === null || startMinute === endMinute) return null;
+      if (startMinute < endMinute) return [[startMinute, endMinute]];
+      return [[startMinute, 24 * 60], [0, endMinute]];
+    }
+
+    function normalizeRule(rule) {
+      return {
+        start: String(rule.start || "06:00"),
+        end: String(rule.end || "09:00"),
+        interval_seconds: Number(rule.interval_seconds || 60)
+      };
+    }
+
+    function rulesToHourlyPlan(rules) {
+      const hours = Array(24).fill(null);
+      (rules || []).map(normalizeRule).forEach(rule => {
+        const ranges = expandedRanges(rule.start, rule.end);
+        if (!ranges) return;
+        ranges.forEach(([rangeStart, rangeEnd]) => {
+          for (let hour = 0; hour < 24; hour += 1) {
+            const hourStart = hour * 60;
+            const hourEnd = hourStart + 60;
+            if (Math.max(rangeStart, hourStart) < Math.min(rangeEnd, hourEnd)) {
+              hours[hour] = Number(rule.interval_seconds || 60);
+            }
+          }
+        });
+      });
+      return hours;
+    }
+
+    function setHourRange(hours, startHour, endHour, interval) {
+      let hour = startHour;
+      do {
+        hours[hour % 24] = interval;
+        hour = (hour + 1) % 24;
+      } while (hour !== endHour % 24);
+    }
+
+    function hourlyPlanToRules(hours) {
+      const normalized = (hours || Array(24).fill(null)).map(value => value ? Number(value) : null);
+      const activeValues = normalized.filter(value => value !== null);
+      if (!activeValues.length) return { rules: [], baseInterval: null };
+      if (activeValues.length === 24 && normalized.every(value => value === normalized[0])) {
+        return { rules: [], baseInterval: normalized[0] };
+      }
+
+      const rules = [];
+      for (let hour = 0; hour < 24; hour += 1) {
+        const value = normalized[hour];
+        const previous = normalized[(hour + 23) % 24];
+        if (value === null || value === previous) continue;
+
+        let endHour = hour + 1;
+        while (endHour < hour + 24 && normalized[endHour % 24] === value) {
+          endHour += 1;
+        }
+        rules.push({
+          start: hourText(hour),
+          end: hourText(endHour),
+          interval_seconds: value
+        });
+      }
+      return { rules, baseInterval: null };
+    }
+
+    function intervalClass(value) {
+      if (!value) return "interval-default";
+      if (value <= 300) return "interval-fast";
+      if (value <= 900) return "interval-medium";
+      if (value < 3600) return "interval-slow";
+      return "interval-quiet";
+    }
+
+    function renderScheduleSummary() {
+      if (!config) return;
+      ensureConfig();
+      const baseInterval = Number(config.scheduler.poll_interval_seconds || document.getElementById("interval").value || 600);
+      const rules = (config.scheduler.interval_rules || []).map(normalizeRule);
+      const enabled = !!config.scheduler.interval_rules_enabled && rules.length > 0;
+      const summary = document.getElementById("scheduleSummary");
+      if (!enabled) {
+        summary.textContent = `하루 종일 ${intervalText(baseInterval)}마다 확인`;
+        return;
+      }
+      const preview = rules.slice(0, 3)
+        .map(rule => `${rule.start}~${rule.end} ${intervalText(rule.interval_seconds)}`)
+        .join(" / ");
+      const extra = rules.length > 3 ? ` 외 ${rules.length - 3}개` : "";
+      summary.textContent = `${preview}${extra} · 기본 ${intervalText(baseInterval)}`;
+    }
+
+    function renderScheduleBrushes() {
+      const el = document.getElementById("scheduleBrushes");
+      el.innerHTML = intervalOptions.map(([value, label]) => {
+        const dataValue = value === null ? "" : String(value);
+        const active = scheduleBrush === value ? "active" : "";
+        return `<button class="${active}" data-interval="${escapeHtml(dataValue)}">${escapeHtml(label)}</button>`;
+      }).join("");
+    }
+
+    function paintScheduleHour(hour) {
+      if (!scheduleDraft || !scheduleDraft.enabled) return;
+      scheduleDraft.hours[hour] = scheduleBrush;
+      document.getElementById("scheduleMessage").textContent = "";
+      renderSchedulePlanner();
+    }
+
+    function renderSchedulePlanner() {
+      const el = document.getElementById("schedulePlanner");
+      if (!scheduleDraft) return;
+      const enabled = !!scheduleDraft.enabled;
+      el.classList.toggle("disabled", !enabled);
+      el.innerHTML = scheduleDraft.hours.map((value, hour) => `
+        <button class="hour-slot ${intervalClass(value)}" data-hour="${hour}" ${enabled ? "" : "disabled"}>
+          <strong>${String(hour).padStart(2, "0")}</strong>
+          <span>${escapeHtml(plannerIntervalText(value))}</span>
+        </button>
+      `).join("");
+      el.querySelectorAll(".hour-slot").forEach(button => {
+        button.addEventListener("mousedown", event => {
+          event.preventDefault();
+          schedulePainting = true;
+          paintScheduleHour(Number(button.dataset.hour));
+        });
+        button.addEventListener("mouseenter", () => {
+          if (schedulePainting) paintScheduleHour(Number(button.dataset.hour));
+        });
+      });
+    }
+
+    function validateScheduleDraft() {
+      if (!scheduleDraft) {
+        return { ok: false, message: "시간대별 설정 창을 다시 열어주세요.", rules: [], baseInterval: null };
+      }
+      const result = hourlyPlanToRules(scheduleDraft.hours);
+      return { ok: true, message: "", rules: result.rules, baseInterval: result.baseInterval };
+    }
+
+    function applySchedulePreset(name) {
+      if (!scheduleDraft) return;
+      scheduleDraft.hours = Array(24).fill(null);
+      scheduleDraft.enabled = name !== "clear";
+      if (name === "rush") {
+        setHourRange(scheduleDraft.hours, 6, 9, 60);
+        setHourRange(scheduleDraft.hours, 9, 18, 600);
+        setHourRange(scheduleDraft.hours, 18, 23, 60);
+        setHourRange(scheduleDraft.hours, 23, 6, 3600);
+      } else if (name === "office") {
+        setHourRange(scheduleDraft.hours, 0, 7, 3600);
+        setHourRange(scheduleDraft.hours, 9, 18, 60);
+        setHourRange(scheduleDraft.hours, 18, 23, 1800);
+      } else if (name === "quietNight") {
+        setHourRange(scheduleDraft.hours, 23, 7, 3600);
+      }
+      document.getElementById("scheduleMessage").textContent = "";
+      renderScheduleModal();
+    }
+
+    function renderScheduleModal() {
+      if (!scheduleDraft) return;
+      const enabled = !!scheduleDraft.enabled;
+      document.getElementById("intervalRulesEnabled").checked = enabled;
+      document.getElementById("modalBaseInterval").textContent = `${intervalText(config.scheduler.poll_interval_seconds || 600)}마다 확인`;
+      renderScheduleBrushes();
+      renderSchedulePlanner();
+    }
+
+    function openScheduleModal() {
+      if (!config) return;
+      ensureConfig();
+      config.scheduler.poll_interval_seconds = Number(document.getElementById("interval").value || config.scheduler.poll_interval_seconds || 600);
+      scheduleDraft = {
+        enabled: !!config.scheduler.interval_rules_enabled,
+        hours: rulesToHourlyPlan(config.scheduler.interval_rules || [])
+      };
+      scheduleBrush = 60;
+      document.getElementById("scheduleMessage").textContent = "";
+      document.getElementById("scheduleMessage").className = "modal-message";
+      document.getElementById("scheduleModal").hidden = false;
+      renderScheduleModal();
+    }
+
+    function closeScheduleModal() {
+      document.getElementById("scheduleModal").hidden = true;
+      scheduleDraft = null;
+      schedulePainting = false;
     }
 
     function renderProfiles() {
@@ -662,9 +1199,13 @@ HTML = r"""<!doctype html>
       config.scheduler = config.scheduler || {};
       config.notifications = config.notifications || {};
       config.naver = config.naver || {};
+      config.media_filter = config.media_filter || {};
       config.rss_feeds = config.rss_feeds || [];
       config.keywords = config.keywords || [];
       config.exclude_keywords = config.exclude_keywords || [];
+      config.media_filter.allowed_domains = config.media_filter.allowed_domains || [];
+      config.scheduler.interval_rules = (config.scheduler.interval_rules || []).map(rule => normalizeRule(rule));
+      config.scheduler.interval_rules_enabled = !!config.scheduler.interval_rules_enabled && config.scheduler.interval_rules.length > 0;
     }
 
     function renderChips(id, items, removeFn) {
@@ -712,6 +1253,55 @@ HTML = r"""<!doctype html>
       });
     }
 
+    function renderMediaOptions() {
+      ensureConfig();
+      const el = document.getElementById("mediaOptions");
+      const summary = document.getElementById("mediaSummary");
+      const enabledInput = document.getElementById("mediaFilterEnabled");
+      const selected = new Set((config.media_filter.allowed_domains || []).map(value => String(value).toLowerCase()));
+      enabledInput.checked = !!config.media_filter.enabled && selected.size > 0;
+      summary.textContent = enabledInput.checked
+        ? `${selected.size}개 매체만 알림`
+        : "전체 매체 허용";
+
+      if (!mediaOptions.length) {
+        el.innerHTML = `<div class="empty">매체 후보 없음</div>`;
+        return;
+      }
+
+      el.innerHTML = mediaOptions.map(option => {
+        const domain = String(option.domain || "");
+        const sources = (option.sources || []).join(", ");
+        const examples = (option.examples || []).slice(0, 2).join(" / ");
+        return `
+          <label class="media-option">
+            <input type="checkbox" data-domain="${escapeHtml(domain)}" ${selected.has(domain.toLowerCase()) ? "checked" : ""}>
+            <span>
+              <strong>${escapeHtml(domain)}</strong>
+              <small>${escapeHtml(option.count || 0)}건${sources ? ` · ${escapeHtml(sources)}` : ""}</small>
+              ${examples ? `<small>${escapeHtml(examples)}</small>` : ""}
+            </span>
+          </label>
+        `;
+      }).join("");
+
+      el.querySelectorAll("input[type='checkbox']").forEach(input => {
+        input.addEventListener("change", async () => {
+          const domain = input.dataset.domain;
+          const domains = new Set(config.media_filter.allowed_domains || []);
+          if (input.checked) {
+            domains.add(domain);
+          } else {
+            domains.delete(domain);
+          }
+          config.media_filter.allowed_domains = Array.from(domains).sort();
+          config.media_filter.enabled = config.media_filter.allowed_domains.length > 0;
+          renderMediaOptions();
+          try { await saveConfig("매체 필터 저장됨"); } catch (error) { setMessage(error.message, "bad"); }
+        });
+      });
+    }
+
     function renderConfig() {
       ensureConfig();
       renderChips("keywords", config.keywords, index => {
@@ -733,7 +1323,9 @@ HTML = r"""<!doctype html>
       document.getElementById("naverDisplay").value = config.naver.display || 20;
       document.getElementById("naverSort").value = config.naver.sort || "date";
       document.getElementById("telegramEnabled").checked = !!config.notifications.telegram_enabled;
+      renderScheduleSummary();
       renderFeeds();
+      renderMediaOptions();
     }
 
     function syncFormToConfig() {
@@ -742,6 +1334,8 @@ HTML = r"""<!doctype html>
       config.scheduler.instant_alerts = document.getElementById("instantAlerts").checked;
       config.scheduler.fixed_time_alerts = document.getElementById("fixedTimeAlerts").checked;
       config.scheduler.poll_interval_seconds = Number(document.getElementById("interval").value);
+      config.scheduler.interval_rules = (config.scheduler.interval_rules || []).map(rule => normalizeRule(rule));
+      config.scheduler.interval_rules_enabled = !!config.scheduler.interval_rules_enabled && config.scheduler.interval_rules.length > 0;
       config.scheduler.fixed_times = document.getElementById("fixedTimes").value
         .split(",")
         .map(value => value.trim())
@@ -749,6 +1343,8 @@ HTML = r"""<!doctype html>
       config.naver.enabled = document.getElementById("naverEnabled").checked;
       config.naver.display = Number(document.getElementById("naverDisplay").value || 20);
       config.naver.sort = document.getElementById("naverSort").value;
+      config.media_filter.enabled = document.getElementById("mediaFilterEnabled").checked
+        && (config.media_filter.allowed_domains || []).length > 0;
       config.notifications.telegram_enabled = document.getElementById("telegramEnabled").checked;
     }
 
@@ -869,6 +1465,84 @@ HTML = r"""<!doctype html>
         renderConfig();
         try { await saveConfig("출처 저장됨"); } catch (error) { setMessage(error.message, "bad"); }
       });
+      document.getElementById("interval").addEventListener("change", () => {
+        if (!config) return;
+        config.scheduler.poll_interval_seconds = Number(document.getElementById("interval").value || 600);
+        renderScheduleSummary();
+      });
+      document.getElementById("openSchedule").addEventListener("click", openScheduleModal);
+      document.getElementById("closeSchedule").addEventListener("click", closeScheduleModal);
+      document.getElementById("cancelSchedule").addEventListener("click", closeScheduleModal);
+      document.getElementById("scheduleModal").addEventListener("click", event => {
+        if (event.target.id === "scheduleModal") closeScheduleModal();
+      });
+      document.getElementById("intervalRulesEnabled").addEventListener("change", event => {
+        if (!scheduleDraft) return;
+        scheduleDraft.enabled = event.target.checked;
+        renderScheduleModal();
+      });
+      document.querySelectorAll("[data-preset]").forEach(button => {
+        button.addEventListener("click", () => applySchedulePreset(button.dataset.preset));
+      });
+      document.getElementById("scheduleBrushes").addEventListener("click", event => {
+        const button = event.target.closest("button[data-interval]");
+        if (!button) return;
+        scheduleBrush = button.dataset.interval ? Number(button.dataset.interval) : null;
+        renderScheduleBrushes();
+      });
+      document.addEventListener("mouseup", () => { schedulePainting = false; });
+      document.getElementById("saveSchedule").addEventListener("click", async () => {
+        if (!scheduleDraft) return;
+        const message = document.getElementById("scheduleMessage");
+        const validation = validateScheduleDraft();
+        if (!validation.ok) {
+          message.textContent = validation.message;
+          message.className = "modal-message bad";
+          return;
+        }
+        if (validation.baseInterval) {
+          config.scheduler.poll_interval_seconds = validation.baseInterval;
+          document.getElementById("interval").value = String(validation.baseInterval);
+        }
+        config.scheduler.interval_rules = validation.rules;
+        config.scheduler.interval_rules_enabled = !!scheduleDraft.enabled && validation.rules.length > 0;
+        message.textContent = "";
+        message.className = "modal-message";
+        try {
+          await saveConfig("시간대별 확인 주기 저장됨");
+          closeScheduleModal();
+        } catch (error) {
+          message.textContent = error.message;
+          message.className = "modal-message bad";
+        }
+      });
+      document.getElementById("mediaFilterEnabled").addEventListener("change", async event => {
+        config.media_filter.enabled = event.target.checked && (config.media_filter.allowed_domains || []).length > 0;
+        renderMediaOptions();
+        try { await saveConfig("매체 필터 저장됨"); } catch (error) { setMessage(error.message, "bad"); }
+      });
+      document.getElementById("refreshMedia").addEventListener("click", async () => {
+        try {
+          setMessage("매체 확인 중");
+          const data = await request("/api/media-options/refresh", { method: "POST", body: "{}" });
+          mediaOptions = data.media_options || [];
+          renderMediaOptions();
+          setMessage(`현재 결과 ${data.total_count || 0}건, 매체 ${mediaOptions.length}개`, "ok");
+          await loadState();
+        } catch (error) { setMessage(error.message, "bad"); }
+      });
+      document.getElementById("selectAllMedia").addEventListener("click", async () => {
+        config.media_filter.allowed_domains = mediaOptions.map(option => option.domain).filter(Boolean).sort();
+        config.media_filter.enabled = config.media_filter.allowed_domains.length > 0;
+        renderMediaOptions();
+        try { await saveConfig("매체 필터 저장됨"); } catch (error) { setMessage(error.message, "bad"); }
+      });
+      document.getElementById("clearMedia").addEventListener("click", async () => {
+        config.media_filter.allowed_domains = [];
+        config.media_filter.enabled = false;
+        renderMediaOptions();
+        try { await saveConfig("매체 필터 해제됨"); } catch (error) { setMessage(error.message, "bad"); }
+      });
       document.getElementById("saveConfig").addEventListener("click", async () => {
         try { await saveConfig(); } catch (error) { setMessage(error.message, "bad"); }
       });
@@ -916,6 +1590,7 @@ HTML = r"""<!doctype html>
       document.getElementById("summary").innerHTML = `
         <span>마지막 검사: ${escapeHtml(state.last_check_at || "-")}</span>
         <span>다음 검사: ${escapeHtml(state.next_check_at || "-")}</span>
+        <span>현재 주기: ${escapeHtml(state.current_interval_seconds ? intervalText(state.current_interval_seconds) : "-")}</span>
         <span>최근 새 기사: ${escapeHtml(state.last_new_count)}</span>
       `;
       document.getElementById("telegramStatus").textContent = data.telegram_configured
@@ -938,6 +1613,7 @@ HTML = r"""<!doctype html>
           <a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">${escapeHtml(item.title)}</a>
           <div class="meta-row">
             <span>${escapeHtml(item.source)}</span>
+            <span>${escapeHtml(item.media_domain || "")}</span>
             <span>${escapeHtml(item.matched_keywords)}</span>
             <span>${escapeHtml(item.published_at || item.first_seen_at || "")}</span>
           </div>
@@ -966,12 +1642,14 @@ HTML = r"""<!doctype html>
     }
 
     async function loadAll() {
-      const [configData, articleData, stateData] = await Promise.all([
+      const [configData, articleData, stateData, mediaData] = await Promise.all([
         request("/api/config"),
         request("/api/articles?limit=40"),
-        request("/api/state")
+        request("/api/state"),
+        request("/api/media-options?limit=200")
       ]);
       config = configData.config;
+      mediaOptions = mediaData.media_options || [];
       renderConfig();
       renderArticles(articleData.articles);
       renderState(stateData);
@@ -1057,6 +1735,73 @@ def validate_fixed_time(value: str) -> bool:
     return 0 <= int(hour) <= 23 and 0 <= int(minute) <= 59
 
 
+def clamp_interval_seconds(value, default: int = 600) -> int:
+    try:
+        seconds = int(value)
+    except (TypeError, ValueError):
+        seconds = default
+    return max(60, min(86400, seconds))
+
+
+def time_to_minutes(value: str) -> int:
+    if not validate_fixed_time(value):
+        raise ValueError(f"시간 형식 오류: {value}")
+    hour, minute = value.split(":", 1)
+    return int(hour) * 60 + int(minute)
+
+
+def expanded_time_ranges(start: str, end: str) -> list[tuple[int, int]]:
+    start_minute = time_to_minutes(start)
+    end_minute = time_to_minutes(end)
+    if start_minute == end_minute:
+        raise ValueError("시간대별 확인 주기는 시작 시간과 종료 시간이 달라야 합니다.")
+    if start_minute < end_minute:
+        return [(start_minute, end_minute)]
+    return [(start_minute, 24 * 60), (0, end_minute)]
+
+
+def normalize_interval_rules(raw_rules, default_interval: int) -> list[dict]:
+    if not isinstance(raw_rules, list):
+        return []
+
+    rules = []
+    expanded_ranges: list[tuple[int, int, str]] = []
+    for raw_rule in raw_rules:
+        if not isinstance(raw_rule, dict):
+            continue
+        start = str(raw_rule.get("start", "")).strip()
+        end = str(raw_rule.get("end", "")).strip()
+        if not validate_fixed_time(start) or not validate_fixed_time(end):
+            raise ValueError(f"시간대별 확인 주기 시간 형식 오류: {start or '-'} ~ {end or '-'}")
+        interval_seconds = clamp_interval_seconds(raw_rule.get("interval_seconds"), default_interval)
+        for range_start, range_end in expanded_time_ranges(start, end):
+            expanded_ranges.append((range_start, range_end, f"{start}~{end}"))
+        rules.append({"start": start, "end": end, "interval_seconds": interval_seconds})
+
+    expanded_ranges.sort(key=lambda item: (item[0], item[1]))
+    previous: tuple[int, int, str] | None = None
+    for current in expanded_ranges:
+        if previous and current[0] < previous[1]:
+            raise ValueError(f"시간대별 확인 주기가 겹칩니다: {previous[2]}, {current[2]}")
+        previous = current
+
+    return rules
+
+
+def current_poll_interval_seconds(scheduler: dict, value: dt.datetime | None = None) -> int:
+    base_interval = clamp_interval_seconds(scheduler.get("poll_interval_seconds", 600))
+    if not scheduler.get("interval_rules_enabled"):
+        return base_interval
+
+    value = value or now_kst()
+    current_minute = value.astimezone(KST).hour * 60 + value.astimezone(KST).minute
+    for rule in scheduler.get("interval_rules") or []:
+        ranges = expanded_time_ranges(rule["start"], rule["end"])
+        if any(start <= current_minute < end for start, end in ranges):
+            return clamp_interval_seconds(rule.get("interval_seconds"), base_interval)
+    return base_interval
+
+
 def default_config(profile_id: str) -> dict:
     profile_id = valid_profile_id(profile_id)
     return {
@@ -1067,10 +1812,16 @@ def default_config(profile_id: str) -> dict:
             "display": 20,
             "sort": "date",
         },
+        "media_filter": {
+            "enabled": False,
+            "allowed_domains": [],
+        },
         "rss_feeds": [],
         "scheduler": {
             "enabled": True,
             "poll_interval_seconds": 600,
+            "interval_rules_enabled": False,
+            "interval_rules": [],
             "instant_alerts": True,
             "fixed_time_alerts": False,
             "fixed_times": ["09:00"],
@@ -1096,6 +1847,11 @@ def normalize_config(config: dict, profile_id: str = DEFAULT_PROFILE_ID) -> dict
     naver["sort"] = naver.get("sort") if naver.get("sort") in {"date", "sim"} else "date"
     config["naver"] = naver
 
+    media_filter = dict(config.get("media_filter") or defaults["media_filter"])
+    media_filter["enabled"] = bool(media_filter.get("enabled", False))
+    media_filter["allowed_domains"] = normalize_string_list(media_filter.get("allowed_domains") or [])
+    config["media_filter"] = media_filter
+
     feeds = []
     for feed in config.get("rss_feeds") or []:
         name = str(feed.get("name", "")).strip()
@@ -1106,7 +1862,14 @@ def normalize_config(config: dict, profile_id: str = DEFAULT_PROFILE_ID) -> dict
 
     scheduler = dict(config.get("scheduler") or defaults["scheduler"])
     scheduler["enabled"] = bool(scheduler.get("enabled", True))
-    scheduler["poll_interval_seconds"] = max(60, int(scheduler.get("poll_interval_seconds", 600) or 600))
+    scheduler["poll_interval_seconds"] = clamp_interval_seconds(scheduler.get("poll_interval_seconds", 600))
+    scheduler["interval_rules"] = normalize_interval_rules(
+        scheduler.get("interval_rules") or [],
+        scheduler["poll_interval_seconds"],
+    )
+    scheduler["interval_rules_enabled"] = bool(scheduler.get("interval_rules_enabled", False)) and bool(
+        scheduler["interval_rules"]
+    )
     scheduler["instant_alerts"] = bool(scheduler.get("instant_alerts", True))
     scheduler["fixed_time_alerts"] = bool(scheduler.get("fixed_time_alerts", False))
     fixed_times = normalize_string_list(scheduler.get("fixed_times") or ["09:00"])
@@ -1152,6 +1915,75 @@ def write_config(profile_id: str, config: dict) -> dict:
 
 def db_path(config: dict) -> Path:
     return BASE_DIR / config.get("database", "news_alerts.sqlite3")
+
+
+def media_options_from_records(records: list[Article | dict]) -> list[dict]:
+    grouped: dict[str, dict] = {}
+    for record in records:
+        if isinstance(record, Article):
+            domain = article_domain(record)
+            source = record.source
+            title = record.title
+        else:
+            domain = article_domain(record.get("url", ""))
+            source = str(record.get("source") or "")
+            title = str(record.get("title") or "")
+        if not domain:
+            continue
+
+        option = grouped.setdefault(
+            domain,
+            {
+                "domain": domain,
+                "count": 0,
+                "sources": set(),
+                "examples": [],
+            },
+        )
+        option["count"] += 1
+        if source:
+            option["sources"].add(source)
+        if title and len(option["examples"]) < 3:
+            option["examples"].append(title)
+
+    options = []
+    for option in grouped.values():
+        options.append(
+            {
+                "domain": option["domain"],
+                "count": option["count"],
+                "sources": sorted(option["sources"]),
+                "examples": option["examples"],
+            }
+        )
+    return sorted(options, key=lambda item: (-item["count"], item["domain"]))
+
+
+def recent_media_options(profile_id: str = DEFAULT_PROFILE_ID, limit: int = 200) -> list[dict]:
+    config = read_config(profile_id)
+    with init_db(db_path(config)) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT source, title, url
+            FROM articles
+            ORDER BY first_seen_at DESC
+            LIMIT ?
+            """,
+            (max(1, min(500, limit)),),
+        ).fetchall()
+    return media_options_from_records([dict(row) for row in rows])
+
+
+def refresh_media_options(profile_id: str = DEFAULT_PROFILE_ID) -> dict:
+    config = read_config(profile_id)
+    articles = collect_articles(config, apply_media_filter=False)
+    options = media_options_from_records(articles)
+    add_event(profile_id, f"Media list updated: {len(options)} domains / {len(articles)} articles")
+    return {
+        "media_options": options,
+        "total_count": len(articles),
+    }
 
 
 def telegram_recipient_ids(profile_id: str, config: dict) -> list[str]:
@@ -1229,7 +2061,12 @@ def recent_articles(profile_id: str = DEFAULT_PROFILE_ID, limit: int = 40) -> li
             """,
             (max(1, min(200, limit)),),
         ).fetchall()
-    return [dict(row) for row in rows]
+    articles = []
+    for row in rows:
+        article = dict(row)
+        article["media_domain"] = article_domain(article.get("url", ""))
+        articles.append(article)
+    return articles
 
 
 def articles_since(config: dict, since_iso: str | None) -> list[Article]:
@@ -1358,11 +2195,15 @@ def scheduler_loop() -> None:
         for profile_id in PROFILES:
             config = read_config(profile_id)
             scheduler = config["scheduler"]
-            interval = scheduler["poll_interval_seconds"]
+            interval = current_poll_interval_seconds(scheduler)
+            now_mono = time.monotonic()
+            if scheduler["enabled"] and next_polls[profile_id] - now_mono > interval:
+                next_polls[profile_id] = now_mono + interval
 
             with STATE_LOCK:
                 state = PROFILE_STATES[profile_id]
                 state["running"] = scheduler["enabled"]
+                state["current_interval_seconds"] = interval if scheduler["enabled"] else None
                 state["next_check_at"] = (
                     local_time_text(dt.datetime.fromtimestamp(time.time() + max(0, next_polls[profile_id] - time.monotonic()), KST))
                     if scheduler["enabled"]
@@ -1378,7 +2219,7 @@ def scheduler_loop() -> None:
                     perform_check(profile_id, mark_seen=False, reason="schedule")
                 except Exception:
                     pass
-                next_polls[profile_id] = time.monotonic() + interval
+                next_polls[profile_id] = time.monotonic() + current_poll_interval_seconds(scheduler)
 
         STOP_EVENT.wait(5)
 
@@ -1453,6 +2294,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"articles": recent_articles(profile_id, limit)})
             return
 
+        if parsed.path == "/api/media-options":
+            params = urllib.parse.parse_qs(parsed.query)
+            limit = int(params.get("limit", ["200"])[0])
+            self.send_json({"media_options": recent_media_options(profile_id, limit)})
+            return
+
         if parsed.path == "/api/state":
             with STATE_LOCK:
                 state = dict(PROFILE_STATES[profile_id])
@@ -1490,6 +2337,10 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/mark-seen":
                 result = perform_check(profile_id, mark_seen=True, reason="manual")
                 self.send_json(result)
+                return
+
+            if parsed.path == "/api/media-options/refresh":
+                self.send_json(refresh_media_options(profile_id))
                 return
 
             if parsed.path == "/api/test-telegram":

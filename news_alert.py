@@ -42,6 +42,39 @@ class Article:
         return self.url.strip()
 
 
+def normalize_domain(value: str | None) -> str:
+    if not value:
+        return ""
+    text = str(value).strip().casefold()
+    if not text:
+        return ""
+    if "://" not in text and not text.startswith("//"):
+        text = f"//{text}"
+    parsed = urllib.parse.urlparse(text)
+    host = parsed.hostname or ""
+    host = host.strip(".")
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
+def article_domain(article_or_url: Article | str | None) -> str:
+    if isinstance(article_or_url, Article):
+        return normalize_domain(article_or_url.url)
+    return normalize_domain(article_or_url)
+
+
+def domain_matches(domain: str, allowed_domains: list[str]) -> bool:
+    normalized = normalize_domain(domain)
+    if not normalized:
+        return False
+    for allowed_domain in allowed_domains:
+        allowed = normalize_domain(allowed_domain)
+        if allowed and (normalized == allowed or normalized.endswith(f".{allowed}")):
+            return True
+    return False
+
+
 def load_dotenv(path: Path) -> None:
     if not path.exists():
         return
@@ -577,22 +610,27 @@ def notify_telegram(articles: list[Article], chat_ids: list[str], token: str | N
                 print(f"[WARN] Telegram notification failed for chat {chat_id}: {exc}", file=sys.stderr)
 
 
-def collect_articles(config: dict) -> list[Article]:
+def collect_articles(config: dict, apply_media_filter: bool = True) -> list[Article]:
     articles = []
     articles.extend(fetch_naver_news(config))
     articles.extend(fetch_rss_feeds(config))
 
     exclude_keywords = config.get("exclude_keywords", [])
-    if not exclude_keywords:
-        return articles
+    if exclude_keywords:
+        filtered = []
+        for article in articles:
+            text = f"{article.title} {article.snippet}".casefold()
+            if any(keyword.casefold() in text for keyword in exclude_keywords):
+                continue
+            filtered.append(article)
+        articles = filtered
 
-    filtered = []
-    for article in articles:
-        text = f"{article.title} {article.snippet}".casefold()
-        if any(keyword.casefold() in text for keyword in exclude_keywords):
-            continue
-        filtered.append(article)
-    return filtered
+    media_filter = config.get("media_filter") or {}
+    allowed_domains = media_filter.get("allowed_domains") or []
+    if apply_media_filter and media_filter.get("enabled") and allowed_domains:
+        articles = [article for article in articles if domain_matches(article_domain(article), allowed_domains)]
+
+    return articles
 
 
 def run_once(config: dict, mark_seen: bool = False) -> int:
